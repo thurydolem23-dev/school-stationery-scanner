@@ -126,6 +126,16 @@ select {
     <p id="staffStatus">Staff not verified.</p>
   </div>
 
+  <div class="panel">
+    <label for="actionMode">What would you like to do?</label>
+    <select id="actionMode"><option value="NEW">Register New Item / Opening Stock</option><option value="IN">Stock In — Refill</option><option value="OUT">Stock Out — Issue</option></select>
+    <div id="searchPanel" hidden>
+      <label for="itemSearch">Find an existing item</label>
+      <input id="itemSearch" placeholder="Item name, color, brand or code">
+      <button id="searchItems" type="button">Search Items</button>
+      <select id="searchResults" aria-label="Matching items"><option value="">Select an item</option></select>
+    </div>
+  </div>
   <!-- Barcode scanner -->
   <div class="panel">
     <h3>Barcode Scanner</h3>
@@ -196,7 +206,7 @@ select {
     <input id="piecesPerBox" type="number" min="1" step="1" value="1" placeholder="e.g. 50">
     <p class="note">Stock is recorded in PCS.</p></div>
   </div>
-  <div id="existingFields" hidden>
+  <div id="existingFields" hidden style="display:none">
     <label for="stockType">Transaction</label>
     <select id="stockType"><option value="IN">Stock In</option><option value="OUT">Stock Out</option></select>
   </div>
@@ -212,7 +222,7 @@ select {
   </div>
   <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
 </div>
-<p class="note">Scan, type a code, or generate a code for a new item. Staff name is taken from your connected account. Use one phone at a time when issuing the same item.</p>
+<p class="note">Scan, type a code, or generate a code for a new item. Staff name is taken from your connected account and saved with each transaction. Use one phone at a time when issuing the same item.</p>
 <p class="note">Add photos manually in Inventory column L. Choose a unit for new items. Existing items keep their saved unit. Current Stock appears only in Google Sheets. Run the included Setup.gs once before using this version.</p>
 
   <script>
@@ -295,7 +305,7 @@ select {
               googleStatus.textContent =
                 "Google Sheets authorization successful.";
               testInventoryConnection();
-              verifyAuthorizedStaff().then(() => { if (authorizedStaff) { loadCategories(); const code = currentBarcode(); if (code) loadScannedItem(code); } });
+              verifyAuthorizedStaff().then(() => { if (authorizedStaff) { loadCategories(); const code = currentBarcode(); if (code) loadScannedItem(code); else changeAction(); } });
 
             },
 
@@ -797,66 +807,104 @@ function setBusy(value) {
   busy = value;
   document.querySelectorAll('button, input, select').forEach(control => { control.disabled = value; });
   updateQuantityMode();
-  saveButton.disabled = value || !authorizedStaff || !currentBarcode() || transactionFields.hidden;
+  if (!value) for (const id of ['itemName','itemColor','itemBrand','itemCategory','itemUnit']) document.getElementById(id).disabled = action() !== 'NEW';
+  saveButton.disabled = value || !authorizedStaff || transactionFields.hidden;
 }
-async function loadScannedItem(barcode) {
-  const serial = ++lookupSerial;
-  if (!authorizedStaff) {
-    formStatus.textContent = 'Connect Google Sheets and verify staff first.';
-    return;
-  }
+function action() { return cell('actionMode'); }
+function changeAction() {
+  if (busy) return;
+  ++lookupSerial;
   selectedItem = null;
-  newFields.hidden = true;
-  existingFields.hidden = true;
-  transactionFields.hidden = true;
+  barcodeEl.textContent = 'No barcode scanned yet.';
+  manualEl.value = '';
+  document.getElementById('labelBarcode').replaceChildren();
+  document.getElementById('quantity').value = '';
+  document.getElementById('itemDetails').hidden = true;
+  document.getElementById('balanceLine').hidden = true;
+  document.getElementById('searchPanel').hidden = action() === 'NEW';
+  document.getElementById('generateCode').hidden = action() !== 'NEW';
+  document.getElementById('stockType').value = action() === 'OUT' ? 'OUT' : 'IN';
+  newFields.hidden = false;
+  for (const id of ['itemName','itemColor','itemBrand','itemCategory','itemUnit']) {
+    document.getElementById(id).value = id === 'itemUnit' ? 'PCS' : '';
+    document.getElementById(id).disabled = action() !== 'NEW';
+  }
+  document.getElementById('storageLocation').value = '';
+  transactionFields.hidden = action() !== 'NEW';
+  titleEl.textContent = action() === 'NEW' ? 'Register New Item' : action() === 'IN' ? 'Stock In — Refill' : 'Stock Out — Issue';
+  saveButton.textContent = action() === 'NEW' ? 'Register Item & Opening Stock' : action() === 'IN' ? 'Save Stock In' : 'Save Stock Out';
+  document.getElementById('unitDisplay').textContent = 'PCS';
+  document.getElementById('searchResults').replaceChildren(new Option('Select an item',''));
+  formStatus.textContent = action() === 'NEW' ? 'Enter item details and opening quantity. Scan/type a barcode, or leave it blank to generate an item code when saved.' : 'Search for an item, scan a barcode, or enter its code manually.';
+  saveButton.disabled = !authorizedStaff || transactionFields.hidden;
+}
+document.getElementById('actionMode').onchange = changeAction;
+let searchSerial = 0;
+document.getElementById('searchItems').onclick = async () => {
+  const serial = ++searchSerial;
+  const mode = action();
+  try {
+    ensureStaff();
+    const query = cell('itemSearch').toLowerCase();
+    if (!query) throw new Error('Enter an item name, color, brand or code to search.');
+    const rows = await readInventory();
+    if (serial !== searchSerial || mode !== action()) return;
+    const select = document.getElementById('searchResults');
+    select.replaceChildren(new Option('Select an item',''));
+    const matches = rows.filter(r => r[0] && r.slice(0,6).join(' ').toLowerCase().includes(query));
+    for (const r of matches.slice(0,100)) select.add(new Option([r[1],r[2],r[3],r[4],r[5],r[0]].filter(Boolean).join(' / '),String(r[0]).trim()));
+    formStatus.textContent = matches.length ? 'Select the matching item below Search Items.' : 'No match. Choose Register New Item if this is a new product.';
+  } catch (e) { formStatus.textContent = e.message; }
+};
+document.getElementById('searchResults').onchange = e => { if (e.target.value) showBarcode(e.target.value); };
+async function loadScannedItem(barcode) {
+  const serial = ++lookupSerial, mode = action();
+  if (!authorizedStaff) { formStatus.textContent = 'Connect Google Sheets first.'; return; }
   saveButton.disabled = true;
-  titleEl.textContent = 'Checking barcode...';
-  formStatus.textContent = 'Looking up ' + barcode + '...';
+  selectedItem = null;
+  formStatus.textContent = 'Looking up item...';
   try {
     const item = findItem(await readInventory(), barcode);
-    if (serial !== lookupSerial || currentBarcode() !== barcode) return;
-    selectedItem = item;
-    document.getElementById('quantity').value = '';
-    document.getElementById('itemDetails').hidden = !item;
-    document.getElementById('balanceLine').hidden = true;
-    if (item) {
-      titleEl.textContent = 'Stock In / Stock Out';
-      newFields.hidden = true;
-      existingFields.hidden = false;
-      document.getElementById('itemDetails').textContent = [item.row[1], item.row[2], item.row[3]].filter(Boolean).join(' / ');
-      document.getElementById('currentBalance').textContent = balanceOf(item.row);
-      document.getElementById('balanceLine').lastChild.textContent = '';
-      document.getElementById('balanceLine').querySelector('strong').lastChild.textContent = ' ' + (item.row[5] || 'PCS');
-      document.getElementById('storageLocation').value = item.row[10] || '';
-      formStatus.textContent = 'Existing item found. Select Stock In or Stock Out.';
+    if (serial !== lookupSerial || mode !== action() || currentBarcode() !== barcode) return;
+    if (mode === 'NEW') {
+      if (item) { transactionFields.hidden = true; throw new Error('This code is already registered. Choose Stock In for a refill or Stock Out to issue it.'); }
+      transactionFields.hidden = false;
+      formStatus.textContent = 'New barcode ready. Complete item details and opening quantity.';
     } else {
-      titleEl.textContent = 'Register New Stationery';
-      newFields.hidden = false;
-      existingFields.hidden = true;
-      document.getElementById('storageLocation').value = '';
-      formStatus.textContent = 'New code. Enter details, select the unit and enter the first Stock In quantity.';
+      transactionFields.hidden = true;
+      if (!item) throw new Error('Item not found. Register it first.');
+      selectedItem = item;
+      for (const [id,index] of [['itemName',1],['itemColor',2],['itemBrand',3],['itemCategory',4],['itemUnit',5]]) {
+        const control = document.getElementById(id), val = String(item.row[index] || '');
+        if (control.tagName === 'SELECT' && val && !Array.from(control.options).some(o=>o.value===val)) control.add(new Option(val,val));
+        control.value = val; control.disabled = true;
+      }
+      document.getElementById('storageLocation').value = item.row[10] || '';
+      document.getElementById('unitDisplay').textContent = item.row[5] || 'PCS';
+      document.getElementById('quantity').value = '';
+      document.getElementById('stockType').value = mode;
+      transactionFields.hidden = false;
+      formStatus.textContent = 'Item selected. Enter the quantity to ' + (mode === 'IN' ? 'add.' : 'issue.');
     }
-    document.getElementById('unitDisplay').textContent = item ? (item.row[5] || 'PCS') : document.getElementById('itemUnit').value;
-    transactionFields.hidden = false;
-    saveButton.textContent = item ? 'Save Transaction' : 'Register Item & Stock In';
-    document.getElementById('quantityMode').value = 'PCS';
-    updateQuantityMode();
-    setBusy(false);
-  } catch (error) {
-    titleEl.textContent = 'Unable to look up barcode';
-    formStatus.textContent = 'Lookup failed: ' + error.message;
-  }
+    saveButton.disabled = false;
+  } catch(e) { formStatus.textContent = e.message; saveButton.disabled = true; }
 }
+changeAction();
 saveButton.onclick = async () => {
   if (busy) return;
-  const barcode = currentBarcode();
+  let barcode = currentBarcode();
   setBusy(true);
   try {
     ensureStaff();
-    if (!barcode) throw new Error('Scan or enter a barcode first.');
+    if (action() !== 'NEW' && (!barcode || !selectedItem)) throw new Error('Select an existing item first.');
+    if (!barcode && action() === 'NEW') {
+      const used = new Set((await readInventory()).map(r=>String(r[0]||'').trim()));
+      do { const random=new Uint32Array(2); crypto.getRandomValues(random); barcode='ST-'+Array.from(random,n=>n.toString(36).toUpperCase().padStart(7,'0')).join(''); } while (used.has(barcode));
+      barcodeEl.textContent=barcode; manualEl.value=barcode; renderLabel(barcode);
+    }
     const qty = quantityInPieces();
     const location = cell('storageLocation');
-    if (!selectedItem) {
+    if (action() === 'NEW') {
       const name = cell('itemName'), category = cell('itemCategory');
       const color = cell('itemColor'), brand = cell('itemBrand');
       const unit = cell('itemUnit');
@@ -885,7 +933,7 @@ saveButton.onclick = async () => {
       const item = findItem(await readInventory(), barcode);
       if (!item) throw new Error('Item not found. Register it first.');
       const previous = balanceOf(item.row);
-      if (type === 'OUT' && qty > previous) throw new Error('Insufficient stock. Available: ' + previous + ' PCS.');
+      if (type === 'OUT' && qty > previous) throw new Error('Stock Out exceeds the available stock. Check Current Stock in Google Sheets.');
       const balance = previous + (type === 'IN' ? qty : -qty);
       const usedLocation = location || item.row[10] || '';
       await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, usedLocation, balance]);
@@ -900,8 +948,16 @@ saveButton.onclick = async () => {
     const savedMessage = formStatus.textContent;
     document.getElementById('quantity').value = '';
     await new Promise(resolve => setTimeout(resolve, 600));
+    if (action() === 'NEW') {
+      document.getElementById('actionMode').value = 'IN';
+      document.getElementById('stockType').value = 'IN';
+      document.getElementById('searchPanel').hidden = false;
+      document.getElementById('generateCode').hidden = true;
+      titleEl.textContent = 'Stock In — Refill';
+      saveButton.textContent = 'Save Stock In';
+    }
     await loadScannedItem(barcode);
-    formStatus.textContent = savedMessage;
+    formStatus.textContent = savedMessage + ' Item code: ' + barcode;
   } catch (error) {
     formStatus.textContent = 'Save failed: ' + error.message;
   } finally { setBusy(false); }
