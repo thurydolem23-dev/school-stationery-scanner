@@ -169,78 +169,47 @@ select {
     <button id="useManual">
       Use Manual Barcode
     </button>
+    <button id="generateCode" type="button">No Barcode — Generate Item Code</button>
   </div>
 
-<!-- Register New Item -->
-<div class="panel" id="registrationForm">
-  <h3>Register New Stationery</h3>
-
-  <label for="itemName">Item Name</label>
-  <input id="itemName" type="text"
-         placeholder="e.g. Ballpen">
-
-  <label for="itemColor">Color</label>
-  <input id="itemColor" type="text"
-         placeholder="e.g. Red">
-
-  <label for="itemBrand">Brand</label>
-  <input id="itemBrand" type="text"
-         placeholder="e.g. Faber-Castell">
-
-  <label for="itemCategory">Category</label>
-  <select id="itemCategory">
-    <option value="">Select category</option>
-    <option>Writing Supplies</option>
-    <option>Paper and Notebooks</option>
-    <option>Art and Craft</option>
-    <option>Office Supplies</option>
-    <option>Teaching Aids</option>
-    <option>Storage and Filing</option>
-    <option>Cleaning Supplies</option>
-    <option>IT Accessories</option>
-  </select>
-
-  <label for="itemUnit">Unit</label>
-  <select id="itemUnit">
-    <option value="PCS">PCS</option>
-    <option value="BOX">BOX</option>
-    <option value="PACK">PACK</option>
-    <option value="SET">SET</option>
-    <option value="ROLL">ROLL</option>
-    <option value="BOTTLE">BOTTLE</option>
-  </select>
-
-  <label for="openingStock">Opening Stock</label>
-  <input id="openingStock" type="number"
-         min="1" step="1" placeholder="Quantity">
-
-  <label for="storageLocation">Storage Location</label>
-  <input id="storageLocation" type="text"
-         placeholder="e.g. Shelf A1">
-
-  <p id="registrationStatus">
-    Registration form ready.
-  </p>
-
-  <button id="saveRegistration" disabled>
-    Save New Item
-  </button>
-</div>
-
-  <div class="panel" id="stockPanel" hidden>
-    <h3>Stock In / Stock Out</h3>
-    <p id="itemDetails">Scan an existing barcode.</p>
-    <p><strong>Current stock: <span id="currentBalance">—</span></strong></p>
+<!-- One adaptive form: only the relevant fields appear after scanning -->
+<div class="panel" id="inventoryForm">
+  <h3 id="formTitle">Scan a barcode to begin</h3>
+  <p id="itemDetails" hidden></p>
+  <p id="balanceLine" hidden><strong>Current stock: <span id="currentBalance">—</span> PCS</strong></p>
+  <div id="newFields" hidden>
+    <label for="itemName">Item Name</label><input id="itemName" placeholder="e.g. Ballpen">
+    <label for="itemColor">Color</label><input id="itemColor" placeholder="e.g. Red">
+    <label for="itemBrand">Brand</label><input id="itemBrand" placeholder="e.g. Faber-Castell">
+    <label for="itemCategory">Category</label>
+    <select id="itemCategory"><option value="">Select category</option>
+      <option>Writing Supplies</option><option>Paper and Notebooks</option>
+      <option>Art and Craft</option><option>Office Supplies</option>
+      <option>Teaching Aids</option><option>Storage and Filing</option>
+      <option>Cleaning Supplies</option><option>IT Accessories</option>
+    </select>
+    <label for="piecesPerBox">Pieces per Box (optional)</label>
+    <input id="piecesPerBox" type="number" min="1" step="1" value="1" placeholder="e.g. 50">
+    <p class="note">The box barcode identifies the item. Stock is always recorded in PCS.</p>
+  </div>
+  <div id="existingFields" hidden>
     <label for="stockType">Transaction</label>
     <select id="stockType"><option value="IN">Stock In</option><option value="OUT">Stock Out</option></select>
-    <label for="stockQty">Quantity (pieces)</label>
-    <input id="stockQty" type="number" min="1" step="1" placeholder="Quantity">
-    <label for="stockLocation">Storage Location</label>
-    <input id="stockLocation" type="text" placeholder="Shelf A1">
-    <button id="saveStock" disabled>Save Transaction</button>
-    <p id="stockStatus" role="status"></p>
   </div>
-  <p class="note">Quantities are counted in pieces. Product photos can be added manually in Inventory column L. Do not close the page while saving.</p>
+  <div id="transactionFields" hidden>
+    <label for="quantityMode">Enter Quantity As</label>
+    <select id="quantityMode"><option value="PCS">Individual pieces (PCS)</option><option value="BOX">Boxes (Stock In only)</option></select>
+    <p id="boxHint" class="note" hidden></p>
+    <label for="quantity">Quantity</label>
+    <input id="quantity" type="number" min="1" step="1" placeholder="Enter quantity">
+    <label for="storageLocation">Storage Location</label>
+    <input id="storageLocation" type="text" placeholder="e.g. Shelf A1">
+    <button id="saveTransaction" disabled>Save Transaction</button>
+  </div>
+  <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
+</div>
+<p class="note">Generated codes must be written down or saved; they cannot be scanned without a printed label. For simultaneous users, avoid issuing the same item at exactly the same time because this direct Sheets connection does not provide a server-side stock lock.</p>
+<p class="note">Use the box barcode to identify a product, but enter the number of individual pieces. Add photos manually in Inventory column L. Pieces per Box is saved in column N. Do not close the page while saving.</p>
 
   <script>
 
@@ -689,29 +658,28 @@ async function verifyAuthorizedStaff() {
 
 
 // =========================================
-// INVENTORY TRANSACTIONS (GOOGLE SHEETS API)
+// INVENTORY TRANSACTIONS — ONE ADAPTIVE FORM
 // =========================================
 const SHEET_ID = STAFF_SPREADSHEET_ID;
 let selectedItem = null;
 let busy = false;
-const regButton = document.getElementById('saveRegistration');
-const stockButton = document.getElementById('saveStock');
-const regStatus = document.getElementById('registrationStatus');
-const stockStatus = document.getElementById('stockStatus');
-const stockPanel = document.getElementById('stockPanel');
-const regPanel = document.getElementById('registrationForm');
+let lookupSerial = 0;
+const saveButton = document.getElementById('saveTransaction');
+const formStatus = document.getElementById('formStatus');
+const newFields = document.getElementById('newFields');
+const existingFields = document.getElementById('existingFields');
+const transactionFields = document.getElementById('transactionFields');
+const titleEl = document.getElementById('formTitle');
 
 function currentBarcode() {
   const code = barcodeEl.textContent.trim();
   return code === 'No barcode scanned yet.' ? '' : code;
 }
-function positiveQty(id) {
-  const raw = document.getElementById(id).value.trim();
-  const value = Number(raw);
-  if (!raw || !Number.isSafeInteger(value) || value <= 0) {
-    throw new Error('Enter a positive whole-number quantity.');
-  }
-  return value;
+function positiveQty() {
+  const raw = document.getElementById('quantity').value.trim();
+  const n = Number(raw);
+  if (!raw || !Number.isSafeInteger(n) || n <= 0) throw new Error('Enter a positive whole-number quantity in PCS.');
+  return n;
 }
 function cell(id) { return document.getElementById(id).value.trim(); }
 function ensureStaff() {
@@ -730,12 +698,8 @@ async function sheetsRequest(range, options = {}) {
   if (!response.ok) throw new Error(json.error?.message || 'Google Sheets request failed (' + response.status + ').');
   return json;
 }
-async function getRows(range) {
-  return (await sheetsRequest(range)).values || [];
-}
-async function appendRow(range, values) {
-  return sheetsRequest(range, { append: true, values: [values] });
-}
+async function getRows(range) { return (await sheetsRequest(range)).values || []; }
+async function appendRow(range, values) { return sheetsRequest(range, { append: true, values: [values] }); }
 async function updateCells(range, values) {
   ensureStaff();
   const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + SHEET_ID + '/values/' + encodeURIComponent(range) + '?valueInputOption=RAW';
@@ -753,109 +717,156 @@ async function loadCategories() {
     const rows = await getRows('Categories!A2:A');
     const select = document.getElementById('itemCategory');
     const previous = select.value;
-    const categories = [...new Set(rows.map(r => (r[0] || '').trim()).filter(Boolean))];
+    const categories = [...new Set(rows.map(r => String(r[0] || '').trim()).filter(Boolean))];
     if (!categories.length) return;
     select.replaceChildren(new Option('Select category', ''));
     for (const category of categories) select.add(new Option(category, category));
     select.value = categories.includes(previous) ? previous : '';
-  } catch (error) { regStatus.textContent = 'Categories could not be loaded: ' + error.message; }
+  } catch (error) { formStatus.textContent = 'Categories could not be loaded: ' + error.message; }
 }
-async function readInventory() {
-  return getRows('Inventory!A2:M');
-}
+async function readInventory() { return getRows('Inventory!A2:N'); }
 function findItem(rows, barcode) {
   const index = rows.findIndex(row => String(row[0] || '').trim() === barcode);
   return index < 0 ? null : { row: rows[index], rowNumber: index + 2 };
 }
-function balanceOf(row) {
-  return (Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0);
+function balanceOf(row) { return (Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0); }
+function packSize(row) { const n = Number(row?.[13]); return Number.isSafeInteger(n) && n > 0 ? n : 1; }
+function updateQuantityMode() {
+  const boxOption = document.querySelector('#quantityMode option[value=BOX]');
+  const canBox = !selectedItem || document.getElementById('stockType').value === 'IN';
+  boxOption.disabled = !canBox;
+  if (!canBox) document.getElementById('quantityMode').value = 'PCS';
+  const n = selectedItem ? packSize(selectedItem.row) : Number(document.getElementById('piecesPerBox').value || 1);
+  const mode = document.getElementById('quantityMode').value;
+  document.getElementById('boxHint').hidden = mode !== 'BOX';
+  document.getElementById('boxHint').textContent = '1 box = ' + n + ' PCS. Quantity will be converted to pieces.';
 }
-async function loadScannedItem(barcode) {
-  if (!authorizedStaff) return;
-  selectedItem = null;
-  regButton.disabled = true;
-  stockButton.disabled = true;
-  regStatus.textContent = 'Looking up barcode...';
+document.getElementById('quantityMode').onchange = updateQuantityMode;
+document.getElementById('stockType').onchange = updateQuantityMode;
+document.getElementById('piecesPerBox').oninput = updateQuantityMode;
+function quantityInPieces() {
+  const entered = positiveQty();
+  if (document.getElementById('quantityMode').value !== 'BOX') return entered;
+  const n = selectedItem ? packSize(selectedItem.row) : Number(document.getElementById('piecesPerBox').value);
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error('Pieces per Box must be a positive whole number.');
+  const total = entered * n;
+  if (!Number.isSafeInteger(total)) throw new Error('Quantity is too large.');
+  return total;
+}
+async function generateItemCode() {
   try {
-    const item = findItem(await readInventory(), barcode);
-    if (currentBarcode() !== barcode) return;
-    selectedItem = item;
-    if (item) {
-      regPanel.hidden = true;
-      stockPanel.hidden = false;
-      document.getElementById('itemDetails').textContent = [item.row[1], item.row[2], item.row[3]].filter(Boolean).join(' / ');
-      document.getElementById('currentBalance').textContent = balanceOf(item.row);
-      document.getElementById('stockLocation').value = item.row[10] || '';
-      stockStatus.textContent = 'Existing item found. Choose Stock In or Stock Out.';
-      stockButton.disabled = false;
-    } else {
-      stockPanel.hidden = true;
-      regPanel.hidden = false;
-      regStatus.textContent = 'New barcode. Enter the item details and opening stock.';
-      regButton.disabled = false;
-    }
-  } catch (error) {
-    regStatus.textContent = 'Lookup failed: ' + error.message;
-    stockStatus.textContent = regStatus.textContent;
-  }
+    ensureStaff();
+    formStatus.textContent = 'Generating item code...';
+    const rows = await readInventory();
+    const used = new Set(rows.map(r => String(r[0] || '').trim()));
+    let candidate;
+    do {
+      const random = new Uint32Array(1);
+      crypto.getRandomValues(random);
+      candidate = 'ST-' + random[0].toString(36).toUpperCase().padStart(7, '0');
+    } while (used.has(candidate));
+    showBarcode(candidate);
+    formStatus.textContent = 'Generated ' + candidate + '. Register this item and save the code for future use.';
+  } catch (error) { formStatus.textContent = 'Cannot generate code: ' + error.message; }
 }
+document.getElementById('generateCode').onclick = generateItemCode;
 function setBusy(value) {
   busy = value;
-  regButton.disabled = value || !authorizedStaff || !!selectedItem || !currentBarcode();
-  stockButton.disabled = value || !authorizedStaff || !selectedItem;
+  saveButton.disabled = value || !authorizedStaff || !currentBarcode() || transactionFields.hidden;
 }
-regButton.onclick = async () => {
-  if (busy) return;
-  setBusy(true);
+async function loadScannedItem(barcode) {
+  const serial = ++lookupSerial;
+  if (!authorizedStaff) {
+    formStatus.textContent = 'Connect Google Sheets and verify staff first.';
+    return;
+  }
+  selectedItem = null;
+  newFields.hidden = true;
+  existingFields.hidden = true;
+  transactionFields.hidden = true;
+  saveButton.disabled = true;
+  titleEl.textContent = 'Checking barcode...';
+  formStatus.textContent = 'Looking up ' + barcode + '...';
   try {
-    ensureStaff();
-    const barcode = currentBarcode();
-    if (!barcode) throw new Error('Scan or enter a barcode first.');
-    const name = cell('itemName'), category = cell('itemCategory'), unit = cell('itemUnit');
-    const color = cell('itemColor'), brand = cell('itemBrand'), location = cell('storageLocation');
-    const qty = positiveQty('openingStock');
-    if (!name || !category || !unit) throw new Error('Item Name, Category and Unit are required.');
-    regStatus.textContent = 'Checking barcode and saving...';
-    if (findItem(await readInventory(), barcode)) throw new Error('Barcode already registered. Scan again to use Stock In.');
-    // Append is atomic, but simultaneous duplicate checks are not; coordinate first-time registrations.
-    const added = await appendRow('Inventory!A:I', [barcode, name, color, brand, category, unit, qty, '', '']);
-    const addedRange = added.updates?.updatedRange || '';
-    const rowMatch = addedRange.match(/![A-Z]+(\d+)/);
-    if (!rowMatch) throw new Error('Inventory item was appended, but its row could not be determined. Check the sheet before retrying.');
-    const addedRow = Number(rowMatch[1]);
-    await updateCells('Inventory!K' + addedRow + ':M' + addedRow, [[location, '', new Date().toISOString()]]);
-    try {
-      await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, name, color, brand, 'OPENING STOCK', qty, authorizedStaff.name, location, qty]);
-    } catch (logError) {
-      throw new Error('Item was added to Inventory, but transaction logging failed. Do NOT save again. Check Transactions manually. ' + logError.message);
-    }
-    regStatus.textContent = 'New item saved successfully. Opening stock: ' + qty;
-    await loadScannedItem(barcode);
-  } catch (error) { regStatus.textContent = 'Save failed: ' + error.message; }
-  finally { setBusy(false); }
-};
-stockButton.onclick = async () => {
-  if (busy) return;
-  setBusy(true);
-  try {
-    ensureStaff();
-    const barcode = currentBarcode(), type = cell('stockType');
-    const qty = positiveQty('stockQty');
-    stockStatus.textContent = 'Checking current balance...';
     const item = findItem(await readInventory(), barcode);
-    if (!item) throw new Error('Item not found. Register it first.');
-    const previous = balanceOf(item.row);
-    if (type === 'OUT' && qty > previous) throw new Error('Insufficient stock. Available: ' + previous);
-    const balance = previous + (type === 'IN' ? qty : -qty);
-    const location = cell('stockLocation') || item.row[10] || '';
-    // Transactions are append-only. H/I inventory formulas derive totals from this log.
-    await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, location, balance]);
-    stockStatus.textContent = 'Saved ' + (type === 'IN' ? 'Stock In' : 'Stock Out') + ': ' + qty + ' pieces. Expected balance: ' + balance + '. Refreshing...';
-    document.getElementById('stockQty').value = '';
+    if (serial !== lookupSerial || currentBarcode() !== barcode) return;
+    selectedItem = item;
+    document.getElementById('quantity').value = '';
+    document.getElementById('itemDetails').hidden = !item;
+    document.getElementById('balanceLine').hidden = !item;
+    if (item) {
+      titleEl.textContent = 'Stock In / Stock Out';
+      newFields.hidden = true;
+      existingFields.hidden = false;
+      document.getElementById('itemDetails').textContent = [item.row[1], item.row[2], item.row[3]].filter(Boolean).join(' / ');
+      document.getElementById('currentBalance').textContent = balanceOf(item.row);
+      document.getElementById('storageLocation').value = item.row[10] || '';
+      formStatus.textContent = 'Existing item found. Select Stock In or Stock Out.';
+    } else {
+      titleEl.textContent = 'Register New Stationery';
+      newFields.hidden = false;
+      existingFields.hidden = true;
+      document.getElementById('storageLocation').value = '';
+      formStatus.textContent = 'New barcode. Enter details and the first Stock In quantity (PCS).';
+    }
+    transactionFields.hidden = false;
+    saveButton.textContent = item ? 'Save Transaction' : 'Register Item & Stock In';
+    document.getElementById('quantityMode').value = 'PCS';
+    updateQuantityMode();
+    setBusy(false);
+  } catch (error) {
+    titleEl.textContent = 'Unable to look up barcode';
+    formStatus.textContent = 'Lookup failed: ' + error.message;
+  }
+}
+saveButton.onclick = async () => {
+  if (busy) return;
+  const barcode = currentBarcode();
+  setBusy(true);
+  try {
+    ensureStaff();
+    if (!barcode) throw new Error('Scan or enter a barcode first.');
+    const qty = quantityInPieces();
+    const location = cell('storageLocation');
+    if (!selectedItem) {
+      const name = cell('itemName'), category = cell('itemCategory');
+      const color = cell('itemColor'), brand = cell('itemBrand');
+      if (!name || !category) throw new Error('Item Name and Category are required.');
+      const perBox = Number(cell('piecesPerBox'));
+      if (!Number.isSafeInteger(perBox) || perBox < 1) throw new Error('Pieces per Box must be a positive whole number.');
+      formStatus.textContent = 'Registering item...';
+      if (findItem(await readInventory(), barcode)) throw new Error('Barcode already registered. Scan again to use Stock In.');
+      // Transitional sheet layout: first Stock In is stored in G (Opening Stock).
+      // Keep existing G/H/I/J columns and formulas unchanged until migration.
+      const added = await appendRow('Inventory!A:I', [barcode, name, color, brand, category, 'PCS', qty, '', '']);
+      const match = (added.updates?.updatedRange || '').match(/![A-Z]+(\d+)/);
+      if (!match) throw new Error('Item was added, but row was not returned. Check Inventory before retrying.');
+      const rowNumber = Number(match[1]);
+      await updateCells('Inventory!K' + rowNumber + ':N' + rowNumber, [[location, '', new Date().toISOString(), perBox]]);
+      try {
+        await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, name, color, brand, 'OPENING STOCK', qty, authorizedStaff.name, location, qty]);
+      } catch (error) {
+        throw new Error('Item registered but transaction log failed. Do NOT save again; check the sheet. ' + error.message);
+      }
+      formStatus.textContent = 'Item registered: ' + qty + ' PCS.';
+    } else {
+      const type = cell('stockType');
+      formStatus.textContent = 'Checking available stock...';
+      const item = findItem(await readInventory(), barcode);
+      if (!item) throw new Error('Item not found. Register it first.');
+      const previous = balanceOf(item.row);
+      if (type === 'OUT' && qty > previous) throw new Error('Insufficient stock. Available: ' + previous + ' PCS.');
+      const balance = previous + (type === 'IN' ? qty : -qty);
+      const usedLocation = location || item.row[10] || '';
+      await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, usedLocation, balance]);
+      formStatus.textContent = 'Saved ' + (type === 'IN' ? 'Stock In' : 'Stock Out') + ': ' + qty + ' PCS.';
+    }
+    document.getElementById('quantity').value = '';
     await new Promise(resolve => setTimeout(resolve, 600));
     await loadScannedItem(barcode);
-  } catch (error) { stockStatus.textContent = 'Save failed: ' + error.message; }
-  finally { setBusy(false); }
+  } catch (error) {
+    formStatus.textContent = 'Save failed: ' + error.message;
+  } finally { setBusy(false); }
 };
 
   </script>
