@@ -120,6 +120,7 @@
     <p id="googleStatus">
       Google Sheets not connected.
     </p>
+    <p id="staffStatus">Staff not verified.</p>
   </div>
 
   <!-- Barcode scanner -->
@@ -184,7 +185,8 @@
       "1012105491430-4kr85dqe1l4riktebt4qadi1otehfnvj.apps.googleusercontent.com";
 
     const GOOGLE_SCOPE =
-      "https://www.googleapis.com/auth/spreadsheets";
+      "https://www.googleapis.com/auth/spreadsheets " +
+      "https://www.googleapis.com/auth/userinfo.email";
 
     let googleAccessToken = null;
     let googleTokenClient = null;
@@ -236,6 +238,7 @@
               googleStatus.textContent =
                 "Google Sheets authorization successful.";
               testInventoryConnection();
+              verifyAuthorizedStaff();
 
             },
 
@@ -512,6 +515,107 @@ async function testInventoryConnection() {
   } catch (error) {
     googleStatus.textContent =
       "Connection error: " + error.message;
+  }
+}
+
+const STAFF_SPREADSHEET_ID =
+  "1A3FeUbRpABsvsSVlwgq7rud88TL7nGk6pmkNDv1jPoQ";
+
+let authorizedStaff = null;
+
+async function verifyAuthorizedStaff() {
+  const staffStatus =
+    document.getElementById("staffStatus");
+
+  authorizedStaff = null;
+  staffStatus.textContent = "Checking staff access...";
+
+  try {
+    if (!googleAccessToken) {
+      throw new Error("Connect Google Sheets first.");
+    }
+
+    // Ask Google which account owns the OAuth token.
+    const profileResponse = await fetch(
+      "https://www.googleapis.com/oauth2/v3/userinfo",
+      {
+        headers: {
+          Authorization: "Bearer " + googleAccessToken
+        }
+      }
+    );
+
+    if (!profileResponse.ok) {
+      throw new Error(
+        "Unable to identify the Google account."
+      );
+    }
+
+    const profile = await profileResponse.json();
+
+    if (!profile.email || !profile.email_verified) {
+      throw new Error(
+        "A verified Google email is required."
+      );
+    }
+
+    const email = profile.email.trim().toLowerCase();
+
+    // Read the Authorized Staff sheet.
+    const range = "'Authorized Staff'!A2:C";
+
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      STAFF_SPREADSHEET_ID +
+      "/values/" +
+      encodeURIComponent(range);
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: "Bearer " + googleAccessToken
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        "Unable to read Authorized Staff."
+      );
+    }
+
+    const data = await response.json();
+    const rows = data.values || [];
+
+    const staff = rows.find(row =>
+      String(row[0] || "").trim().toLowerCase() === email
+    );
+
+    if (!staff) {
+      throw new Error(
+        "Your Google account is not on the staff list."
+      );
+    }
+
+    if (
+      String(staff[2] || "").trim().toLowerCase() !==
+      "active"
+    ) {
+      throw new Error("Your staff account is inactive.");
+    }
+
+    authorizedStaff = {
+      email: email,
+      name: String(staff[1] || "").trim()
+    };
+
+    staffStatus.textContent =
+      "Authorized Staff: " +
+      authorizedStaff.name +
+      " — Active";
+
+  } catch (error) {
+    authorizedStaff = null;
+    staffStatus.textContent =
+      "Access not verified: " + error.message;
   }
 }
 
