@@ -4,20 +4,58 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <title>School Stationery Scanner</title>
 
+  <!-- Barcode scanner library -->
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
+  <!-- Google authorization library -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       font-family: Arial, sans-serif;
       max-width: 480px;
-      margin: auto;
+      margin: 0 auto;
       padding: 18px;
       background: #f5f7fa;
+      color: #222;
     }
 
-    h2 { text-align: center; }
+    h2 {
+      text-align: center;
+      margin-bottom: 22px;
+    }
+
+    button,
+    input {
+      width: 100%;
+      padding: 14px;
+      margin: 7px 0;
+      font-size: 16px;
+      border-radius: 8px;
+    }
+
+    button {
+      background: #1769aa;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #stop {
+      background: #666;
+    }
 
     #reader {
       width: 100%;
@@ -26,139 +64,418 @@
       overflow: hidden;
     }
 
-    button, input {
-      box-sizing: border-box;
-      width: 100%;
-      padding: 13px;
-      margin: 7px 0;
-      font-size: 16px;
-    }
-
-    button {
-      background: #1769aa;
-      color: white;
-      border: none;
-      border-radius: 7px;
-      cursor: pointer;
-    }
-
-    #stop { background: #666; }
-
-    #result {
+    #result,
+    .panel {
       background: white;
       padding: 15px;
-      margin-top: 15px;
-      border-radius: 8px;
+      margin: 15px 0;
+      border-radius: 10px;
       overflow-wrap: anywhere;
     }
 
-    #status {
+    #status,
+    #googleStatus {
       text-align: center;
       color: #444;
+      line-height: 1.5;
+    }
+
+    #barcode {
+      font-size: 20px;
+      font-weight: bold;
+      overflow-wrap: anywhere;
+    }
+
+    input {
+      border: 1px solid #ccc;
+      background: white;
+    }
+
+    label {
+      display: block;
+      margin-top: 12px;
+      font-weight: bold;
+    }
+
+    .note {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.5;
     }
   </style>
 </head>
 
 <body>
+
   <h2>School Stationery Scanner</h2>
 
-  <button id="start">Start Barcode Scanner</button>
-  <button id="stop">Stop Scanner</button>
+  <!-- Google Sheets connection -->
+  <div class="panel">
+    <h3>Google Sheets Connection</h3>
 
-  <div id="reader"></div>
+    <button id="connectGoogle">
+      Connect Google Sheets
+    </button>
 
-  <p id="status">Scanner not started.</p>
-
-  <div id="result">
-    <strong>Scanned Barcode:</strong>
-    <p id="barcode">No barcode scanned yet.</p>
+    <p id="googleStatus">
+      Google Sheets not connected.
+    </p>
   </div>
 
-  <label for="manual">Manual Barcode Entry</label>
-  <input id="manual" type="text"
-         placeholder="Enter barcode manually">
+  <!-- Barcode scanner -->
+  <div class="panel">
+    <h3>Barcode Scanner</h3>
 
-  <button id="useManual">Use Manual Barcode</button>
+    <button id="start">
+      Start Barcode Scanner
+    </button>
+
+    <button id="stop">
+      Stop Scanner
+    </button>
+
+    <div id="reader"></div>
+
+    <p id="status">
+      Scanner not started.
+    </p>
+  </div>
+
+  <!-- Barcode result -->
+  <div id="result">
+    <strong>Scanned Barcode:</strong>
+
+    <p id="barcode">
+      No barcode scanned yet.
+    </p>
+  </div>
+
+  <!-- Manual barcode entry -->
+  <div class="panel">
+    <label for="manual">
+      Manual Barcode Entry
+    </label>
+
+    <input
+      id="manual"
+      type="text"
+      inputmode="numeric"
+      placeholder="Enter barcode manually"
+    >
+
+    <button id="useManual">
+      Use Manual Barcode
+    </button>
+  </div>
+
+  <p class="note">
+    This version tests Google authorization and barcode
+    scanning. Inventory updates will be enabled after
+    staff access checks are implemented.
+  </p>
 
   <script>
+
+    // =========================================
+    // GOOGLE SHEETS AUTHORIZATION
+    // =========================================
+
+    const GOOGLE_CLIENT_ID =
+      "1012105491430-4kr85dqe1l4riktebt4qadi1otehfnvj.apps.googleusercontent.com";
+
+    const GOOGLE_SCOPE =
+      "https://www.googleapis.com/auth/spreadsheets";
+
+    let googleAccessToken = null;
+    let googleTokenClient = null;
+
+    const googleStatus =
+      document.getElementById("googleStatus");
+
+    document.getElementById("connectGoogle").onclick = () => {
+
+      if (!window.google ||
+          !window.google.accounts ||
+          !window.google.accounts.oauth2) {
+
+        googleStatus.textContent =
+          "Google authorization is still loading. Please try again.";
+
+        return;
+      }
+
+      if (!googleTokenClient) {
+
+        googleTokenClient =
+          google.accounts.oauth2.initTokenClient({
+
+            client_id: GOOGLE_CLIENT_ID,
+
+            scope: GOOGLE_SCOPE,
+
+            callback: (response) => {
+
+              if (response.error) {
+
+                googleStatus.textContent =
+                  "Connection failed: " + response.error;
+
+                return;
+              }
+
+              if (!response.access_token) {
+
+                googleStatus.textContent =
+                  "No access token received.";
+
+                return;
+              }
+
+              googleAccessToken = response.access_token;
+
+              googleStatus.textContent =
+                "Google Sheets authorization successful.";
+
+            },
+
+            error_callback: (error) => {
+
+              googleStatus.textContent =
+                "Authorization cancelled or failed: " +
+                (error.type || "Unknown error");
+
+            }
+
+          });
+      }
+
+      googleTokenClient.requestAccessToken({
+        prompt: googleAccessToken ? "" : "consent"
+      });
+
+    };
+
+
+    // =========================================
+    // BARCODE SCANNER
+    // =========================================
+
     let scanner = null;
     let running = false;
+    let starting = false;
+    let stopping = false;
 
-    const statusEl = document.getElementById("status");
-    const barcodeEl = document.getElementById("barcode");
+    const statusEl =
+      document.getElementById("status");
+
+    const barcodeEl =
+      document.getElementById("barcode");
+
+    const manualEl =
+      document.getElementById("manual");
+
+    const startButton =
+      document.getElementById("start");
+
+    const stopButton =
+      document.getElementById("stop");
+
+
+    // =========================================
+    // DISPLAY BARCODE
+    // =========================================
 
     function showBarcode(value) {
+
       const code = String(value || "").trim();
-      if (!code) return;
+
+      if (!code) {
+        statusEl.textContent =
+          "Please enter or scan a barcode.";
+        return;
+      }
 
       barcodeEl.textContent = code;
-      document.getElementById("manual").value = code;
-      statusEl.textContent = "Barcode detected successfully.";
 
-      if (navigator.vibrate) navigator.vibrate(150);
+      manualEl.value = code;
+
+      statusEl.textContent =
+        "Barcode detected successfully.";
+
+      if (navigator.vibrate) {
+        navigator.vibrate(150);
+      }
 
       stopScanner();
+
     }
 
+
+    // =========================================
+    // START CAMERA SCANNER
+    // =========================================
+
     async function startScanner() {
-      if (running) return;
+
+      if (running || starting || stopping) {
+        return;
+      }
+
+      starting = true;
+      startButton.disabled = true;
+
+      statusEl.textContent =
+        "Starting camera...";
 
       try {
+
         if (!window.Html5Qrcode) {
-          throw new Error("Scanner library failed to load.");
+          throw new Error(
+            "Barcode scanner library failed to load."
+          );
         }
 
         scanner = new Html5Qrcode("reader");
 
         await scanner.start(
+
           { facingMode: "environment" },
+
           {
             fps: 10,
-            qrbox: { width: 250, height: 150 },
+
+            qrbox: {
+              width: 250,
+              height: 150
+            },
+
             aspectRatio: 1.777778
           },
-          showBarcode,
+
+          (decodedText) => {
+            showBarcode(decodedText);
+          },
+
           () => {}
+
         );
 
         running = true;
-        statusEl.textContent = "Point camera at a barcode.";
+
+        statusEl.textContent =
+          "Point the camera at a barcode.";
 
       } catch (error) {
+
         running = false;
+
+        const failedScanner = scanner;
         scanner = null;
+
+        if (failedScanner) {
+          try {
+            failedScanner.clear();
+          } catch (e) {
+            console.log(e);
+          }
+        }
+
         statusEl.textContent =
-          "Scanner error: " + (error.message || String(error));
+          "Scanner error: " +
+          (error.message || String(error));
+
+      } finally {
+
+        starting = false;
+        startButton.disabled = false;
+
       }
+
     }
+
+
+    // =========================================
+    // STOP CAMERA SCANNER
+    // =========================================
 
     async function stopScanner() {
-      if (!scanner) return;
 
-      const current = scanner;
+      if (stopping) {
+        return;
+      }
+
+      // Wait briefly if camera startup is still in progress.
+      if (starting) {
+        setTimeout(stopScanner, 250);
+        return;
+      }
+
+      if (!scanner) {
+        return;
+      }
+
+      stopping = true;
+
+      const currentScanner = scanner;
+
+      try {
+
+        if (running) {
+          await currentScanner.stop();
+        }
+
+      } catch (error) {
+        console.log("Stop error:", error);
+      }
+
+      try {
+        currentScanner.clear();
+      } catch (error) {
+        console.log("Clear error:", error);
+      }
+
       scanner = null;
-
-      try {
-        await current.stop();
-      } catch (error) {
-        console.log(error);
-      }
-
-      try {
-        current.clear();
-      } catch (error) {
-        console.log(error);
-      }
-
       running = false;
+      stopping = false;
+
     }
 
-    document.getElementById("start").onclick = startScanner;
-    document.getElementById("stop").onclick = stopScanner;
+
+    // =========================================
+    // BUTTON ACTIONS
+    // =========================================
+
+    startButton.onclick = startScanner;
+
+    stopButton.onclick = async () => {
+
+      await stopScanner();
+
+      statusEl.textContent =
+        "Scanner stopped.";
+
+    };
 
     document.getElementById("useManual").onclick = () => {
-      showBarcode(document.getElementById("manual").value);
+
+      showBarcode(manualEl.value);
+
     };
+
+
+    // =========================================
+    // CAMERA CLEANUP
+    // =========================================
+
+    window.addEventListener("pagehide", () => {
+
+      if (scanner && running) {
+        stopScanner();
+      }
+
+    });
+
   </script>
+
 </body>
 </html>
