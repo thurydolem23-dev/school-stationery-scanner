@@ -1,0 +1,68 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>School Stationery Scanner</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 480px;
+      margin: 40px auto;
+      padding: 20px;
+      text-align: center;
+    }
+    button {
+      padding: 14px 20px;
+      font-size: 16px;
+      margin: 10px;
+    }
+    video {
+      width: 100%;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h2>School Stationery Scanner</h2>
+  <p>Camera test</p>
+  <button id="start">Open Camera</button>
+  <button id="stop">Stop Camera</button>
+  <video id="preview" autoplay playsinline muted></video>
+  <p id="status">Camera not started.</p>
+
+  <script>
+    let stream = null;
+
+    document.getElementById("start").onclick = async () => {
+      try {
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+
+        document.getElementById("preview").srcObject = stream;
+        document.getElementById("status").textContent =
+          "Camera opened successfully.";
+      } catch (error) {
+        document.getElementById("status").textContent =
+          "Camera error: " + error.message;
+      }
+    };
+
+    document.getElementById("stop").onclick = () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      document.getElementById("preview").srcObject = null;
+      document.getElementById("status").textContent = "Camera stopped.";
+    };
+  </script>
+</body>
+</html>
