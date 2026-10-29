@@ -5,63 +5,159 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>School Stationery Scanner</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
   <style>
     body {
       font-family: Arial, sans-serif;
       max-width: 480px;
-      margin: 40px auto;
-      padding: 20px;
-      text-align: center;
+      margin: auto;
+      padding: 18px;
+      background: #f5f7fa;
     }
-    button {
-      padding: 14px 20px;
-      font-size: 16px;
-      margin: 10px;
-    }
-    video {
+
+    h2 { text-align: center; }
+
+    #reader {
       width: 100%;
-      border-radius: 12px;
+      background: white;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    button, input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 13px;
+      margin: 7px 0;
+      font-size: 16px;
+    }
+
+    button {
+      background: #1769aa;
+      color: white;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    #stop { background: #666; }
+
+    #result {
+      background: white;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    #status {
+      text-align: center;
+      color: #444;
     }
   </style>
 </head>
+
 <body>
   <h2>School Stationery Scanner</h2>
-  <p>Camera test</p>
-  <button id="start">Open Camera</button>
-  <button id="stop">Stop Camera</button>
-  <video id="preview" autoplay playsinline muted></video>
-  <p id="status">Camera not started.</p>
+
+  <button id="start">Start Barcode Scanner</button>
+  <button id="stop">Stop Scanner</button>
+
+  <div id="reader"></div>
+
+  <p id="status">Scanner not started.</p>
+
+  <div id="result">
+    <strong>Scanned Barcode:</strong>
+    <p id="barcode">No barcode scanned yet.</p>
+  </div>
+
+  <label for="manual">Manual Barcode Entry</label>
+  <input id="manual" type="text"
+         placeholder="Enter barcode manually">
+
+  <button id="useManual">Use Manual Barcode</button>
 
   <script>
-    let stream = null;
+    let scanner = null;
+    let running = false;
 
-    document.getElementById("start").onclick = async () => {
+    const statusEl = document.getElementById("status");
+    const barcodeEl = document.getElementById("barcode");
+
+    function showBarcode(value) {
+      const code = String(value || "").trim();
+      if (!code) return;
+
+      barcodeEl.textContent = code;
+      document.getElementById("manual").value = code;
+      statusEl.textContent = "Barcode detected successfully.";
+
+      if (navigator.vibrate) navigator.vibrate(150);
+
+      stopScanner();
+    }
+
+    async function startScanner() {
+      if (running) return;
+
       try {
-        if (stream) {
-          stream.getTracks().forEach(track => track.stop());
+        if (!window.Html5Qrcode) {
+          throw new Error("Scanner library failed to load.");
         }
 
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false
-        });
+        scanner = new Html5Qrcode("reader");
 
-        document.getElementById("preview").srcObject = stream;
-        document.getElementById("status").textContent =
-          "Camera opened successfully.";
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 150 },
+            aspectRatio: 1.777778
+          },
+          showBarcode,
+          () => {}
+        );
+
+        running = true;
+        statusEl.textContent = "Point camera at a barcode.";
+
       } catch (error) {
-        document.getElementById("status").textContent =
-          "Camera error: " + error.message;
+        running = false;
+        scanner = null;
+        statusEl.textContent =
+          "Scanner error: " + (error.message || String(error));
       }
-    };
+    }
 
-    document.getElementById("stop").onclick = () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
+    async function stopScanner() {
+      if (!scanner) return;
+
+      const current = scanner;
+      scanner = null;
+
+      try {
+        await current.stop();
+      } catch (error) {
+        console.log(error);
       }
-      document.getElementById("preview").srcObject = null;
-      document.getElementById("status").textContent = "Camera stopped.";
+
+      try {
+        current.clear();
+      } catch (error) {
+        console.log(error);
+      }
+
+      running = false;
+    }
+
+    document.getElementById("start").onclick = startScanner;
+    document.getElementById("stop").onclick = stopScanner;
+
+    document.getElementById("useManual").onclick = () => {
+      showBarcode(document.getElementById("manual").value);
     };
   </script>
 </body>
