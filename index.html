@@ -194,7 +194,7 @@ select {
     <label for="itemName">Item Name</label><input id="itemName" placeholder="e.g. Ballpen">
     <label for="itemColor">Color</label><input id="itemColor" placeholder="e.g. Red">
     <label for="itemBrand">Brand</label><input id="itemBrand" placeholder="e.g. Faber-Castell">
-    <label for="itemUnit">Unit</label><select id="itemUnit"><option>PCS</option><option>BOX</option><option>PACK</option><option>SET</option><option>ROLL</option><option>BOTTLE</option><option>REAM</option></select>
+    <input id="itemUnit" type="hidden" value="PCS">
     <label for="itemCategory">Category</label>
     <select id="itemCategory"><option value="">Select category</option>
       <option>Writing Supplies</option><option>Paper and Notebooks</option>
@@ -202,19 +202,15 @@ select {
       <option>Teaching Aids</option><option>Storage and Filing</option>
       <option>Cleaning Supplies</option><option>IT Accessories</option>
     </select>
-    <div hidden><label for="piecesPerBox">Pieces per Box (optional)</label>
-    <input id="piecesPerBox" type="number" min="1" step="1" value="1" placeholder="e.g. 50">
-    <p class="note">Stock is recorded in PCS.</p></div>
+
   </div>
   <div id="existingFields" hidden style="display:none">
     <label for="stockType">Transaction</label>
     <select id="stockType"><option value="IN">Stock In</option><option value="OUT">Stock Out</option></select>
   </div>
   <div id="transactionFields" hidden>
-    <div hidden><label for="quantityMode">Enter Quantity As</label>
-    <select id="quantityMode"><option value="PCS">Individual pieces (PCS)</option><option value="BOX">Boxes (Stock In only)</option></select>
-    <p id="boxHint" class="note" hidden></p></div>
-    <p>Unit: <strong id="unitDisplay">PCS</strong></p><label for="quantity">Stock Quantity</label>
+
+    <label for="quantity">Quantity (PCS)</label><strong id="unitDisplay" hidden>PCS</strong>
     <input id="quantity" type="number" min="1" step="1" placeholder="Enter quantity">
     <label for="storageLocation">Storage Location</label>
     <input id="storageLocation" type="text" placeholder="e.g. Shelf A1">
@@ -223,9 +219,20 @@ select {
   <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
 </div>
 <p class="note">Scan, type a code, or generate a code for a new item. Staff name is taken from your connected account and saved with each transaction. Use one phone at a time when issuing the same item.</p>
-<p class="note">Add photos manually in Inventory column L. Choose a unit for new items. Existing items keep their saved unit. Current Stock appears only in Google Sheets. Run the included Setup.gs once before using this version.</p>
+<p class="note">Add photos manually in Inventory column L. Times are saved in UAE time (UTC+4). Enter all quantities as individual pieces (PCS). Convert any old pack or box records to pieces before using them. Current Stock appears only in Google Sheets. Run the included Setup.gs once before using this version.</p>
 
   <script>
+
+    // Save an explicit UAE offset, independent of the phone/computer timezone.
+    function uaeTimestamp(date = new Date()) {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Dubai', year: 'numeric', month: '2-digit',
+        day: '2-digit', hour: '2-digit', minute: '2-digit',
+        second: '2-digit', hourCycle: 'h23'
+      }).formatToParts(date);
+      const p = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}+04:00`;
+    }
 
     function renderLabel(code) {
       const svg = document.getElementById('labelBarcode');
@@ -720,7 +727,7 @@ function ensureStaff() {
 async function sheetsRequest(range, options = {}) {
   ensureStaff();
   const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + SHEET_ID + '/values/';
-  const url = base + encodeURIComponent(range) + (options.append ? ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS' : '');
+  const url = base + encodeURIComponent(range) + (options.append ? ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS' : options.formula ? '?valueRenderOption=FORMULA' : '');
   const response = await fetch(url, {
     method: options.values ? 'POST' : 'GET',
     headers: { Authorization: 'Bearer ' + googleAccessToken, 'Content-Type': 'application/json' },
@@ -762,30 +769,8 @@ function findItem(rows, barcode) {
   return index < 0 ? null : { row: rows[index], rowNumber: index + 2 };
 }
 function balanceOf(row) { return (Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0); }
-function packSize(row) { const n = Number(row?.[13]); return Number.isSafeInteger(n) && n > 0 ? n : 1; }
-function updateQuantityMode() {
-  const boxOption = document.querySelector('#quantityMode option[value=BOX]');
-  const canBox = !selectedItem || document.getElementById('stockType').value === 'IN';
-  boxOption.disabled = !canBox;
-  if (!canBox) document.getElementById('quantityMode').value = 'PCS';
-  const n = selectedItem ? packSize(selectedItem.row) : Number(document.getElementById('piecesPerBox').value || 1);
-  const mode = document.getElementById('quantityMode').value;
-  document.getElementById('boxHint').hidden = mode !== 'BOX';
-  document.getElementById('boxHint').textContent = '1 box = ' + n + ' PCS. Quantity will be converted to pieces.';
-}
-document.getElementById('itemUnit').onchange = () => { document.getElementById('unitDisplay').textContent = document.getElementById('itemUnit').value; };
-document.getElementById('quantityMode').onchange = updateQuantityMode;
-document.getElementById('stockType').onchange = updateQuantityMode;
-document.getElementById('piecesPerBox').oninput = updateQuantityMode;
-function quantityInPieces() {
-  const entered = positiveQty();
-  if (document.getElementById('quantityMode').value !== 'BOX') return entered;
-  const n = selectedItem ? packSize(selectedItem.row) : Number(document.getElementById('piecesPerBox').value);
-  if (!Number.isSafeInteger(n) || n < 1) throw new Error('Pieces per Box must be a positive whole number.');
-  const total = entered * n;
-  if (!Number.isSafeInteger(total)) throw new Error('Quantity is too large.');
-  return total;
-}
+function updateQuantityMode() {}
+function quantityInPieces() { return positiveQty(); }
 async function generateItemCode() {
   try {
     ensureStaff();
@@ -873,8 +858,9 @@ async function loadScannedItem(barcode) {
     } else {
       transactionFields.hidden = true;
       if (!item) throw new Error('Item not found. Register it first.');
+      if (String(item.row[5] || '').trim().toUpperCase() !== 'PCS') throw new Error('This item uses a different unit. Convert its recorded quantities to pieces and set Inventory Unit to PCS first.');
       selectedItem = item;
-      for (const [id,index] of [['itemName',1],['itemColor',2],['itemBrand',3],['itemCategory',4],['itemUnit',5]]) {
+      for (const [id,index] of [['itemName',1],['itemColor',2],['itemBrand',3],['itemCategory',4]]) {
         const control = document.getElementById(id), val = String(item.row[index] || '');
         if (control.tagName === 'SELECT' && val && !Array.from(control.options).some(o=>o.value===val)) control.add(new Option(val,val));
         control.value = val; control.disabled = true;
@@ -904,25 +890,27 @@ saveButton.onclick = async () => {
     }
     const qty = quantityInPieces();
     const location = cell('storageLocation');
+    const transactionTime = uaeTimestamp();
     if (action() === 'NEW') {
       const name = cell('itemName'), category = cell('itemCategory');
       const color = cell('itemColor'), brand = cell('itemBrand');
       const unit = cell('itemUnit');
-      if (!['PCS','BOX','PACK','SET','ROLL','BOTTLE','REAM'].includes(unit)) throw new Error('Select a unit.');
+      if (unit !== 'PCS') throw new Error('Select a unit.');
       if (!name || !category) throw new Error('Item Name and Category are required.');
-      const perBox = Number(cell('piecesPerBox'));
-      if (!Number.isSafeInteger(perBox) || perBox < 1) throw new Error('Pieces per Box must be a positive whole number.');
+      
       formStatus.textContent = 'Registering item...';
       if (findItem(await readInventory(), barcode)) throw new Error('Barcode already registered. Scan again to use Stock In.');
       // Transitional sheet layout: first Stock In is stored in G (Opening Stock).
       // Keep existing G/H/I/J columns and formulas unchanged until migration.
-      const added = await appendRow('Inventory!A:G', [barcode, name, color, brand, category, unit, qty]);
+      const g2 = (await sheetsRequest('Inventory!G2', {formula:true})).values?.[0]?.[0];
+      const openingFormula = typeof g2 === 'string' && g2.startsWith('=');
+      const added = await appendRow(openingFormula ? 'Inventory!A:F' : 'Inventory!A:G', openingFormula ? [barcode,name,color,brand,category,'PCS'] : [barcode,name,color,brand,category,'PCS',qty]);
       const match = (added.updates?.updatedRange || '').match(/![A-Z]+(\d+)/);
       if (!match) throw new Error('Item was added, but row was not returned. Check Inventory before retrying.');
       const rowNumber = Number(match[1]);
-      await updateCells('Inventory!K' + rowNumber + ':M' + rowNumber, [[location, '', new Date().toISOString()]]);
+      await updateCells('Inventory!K' + rowNumber + ':M' + rowNumber, [[location, '', transactionTime]]);
       try {
-        await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, name, color, brand, 'OPENING STOCK', qty, authorizedStaff.name, location, qty]);
+        await appendRow('Transactions!A:J', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', qty, authorizedStaff.name, location, qty]);
       } catch (error) {
         throw new Error('Item registered but transaction log failed. Do NOT save again; check the sheet. ' + error.message);
       }
@@ -932,14 +920,15 @@ saveButton.onclick = async () => {
       formStatus.textContent = 'Checking available stock...';
       const item = findItem(await readInventory(), barcode);
       if (!item) throw new Error('Item not found. Register it first.');
+      if (String(item.row[5] || '').trim().toUpperCase() !== 'PCS') throw new Error('Convert this item to PCS in the sheet before saving.');
       const previous = balanceOf(item.row);
       if (type === 'OUT' && qty > previous) throw new Error('Stock Out exceeds the available stock. Check Current Stock in Google Sheets.');
       const balance = previous + (type === 'IN' ? qty : -qty);
       const usedLocation = location || item.row[10] || '';
-      await appendRow('Transactions!A:J', [new Date().toISOString(), barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, usedLocation, balance]);
+      await appendRow('Transactions!A:J', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, usedLocation, balance]);
       try {
         await updateCells('Inventory!K' + item.rowNumber, [[usedLocation]]);
-        await updateCells('Inventory!M' + item.rowNumber, [[new Date().toISOString()]]);
+        await updateCells('Inventory!M' + item.rowNumber, [[transactionTime]]);
       } catch (metadataError) {
         document.getElementById('status').textContent = 'Stock transaction saved. Location/date update failed; check the sheet.';
       }
