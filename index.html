@@ -195,7 +195,9 @@ select {
       <label for="quantity">Stock Quantity</label><strong id="unitDisplay" hidden>PCS</strong>
       <input id="quantity" type="number" min="1" step="1" placeholder="Enter quantity">
     </div></div>
-    <div id="packFields" hidden><label id="packLabel" for="pcsPerPack">Pcs per box</label>
+    <label for="packUnit">Packing type (optional)</label>
+    <select id="packUnit"><option value="">No packing details</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="SET">Set</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="BOTTLE">Bottle</option></select>
+    <div id="packFields" hidden><label id="packLabel" for="pcsPerPack">Pcs per box (optional)</label>
       <input id="pcsPerPack" type="number" min="1" step="1" placeholder="e.g. 50">
     </div>
     <p id="conversion" role="status"></p>
@@ -205,7 +207,7 @@ select {
   </div>
   <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
 </div>
-<p class="note">Stock totals are kept in PCS. Staff name comes from your connected account. Add photos in Inventory column L.</p>
+<p class="note">Stock totals use the item’s Unit in Inventory F. Packing details are for reference only. Staff name comes from your connected account. Add photos in Inventory column L.</p>
 
   <script>
 
@@ -767,24 +769,25 @@ function findItem(rows, barcode) {
 }
 function balanceOf(row) { return (Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0); }
 function packSize() {
-  if (cell('itemUnit') === 'PCS') return 1;
-  const n = Number(cell('pcsPerPack'));
-  if (!Number.isSafeInteger(n) || n <= 0) throw new Error('Enter the pieces per selected unit.');
+  const raw = cell('pcsPerPack');
+  if (!raw) return '';
+  if (!cell('packUnit')) throw new Error('Choose a packing type for the packing details.');
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error('Pieces per pack must be a positive whole number, or leave it blank.');
   return n;
 }
 function updateQuantityMode() {
-  const unit = cell('itemUnit');
-  document.getElementById('packFields').hidden = unit === 'PCS';
-  document.getElementById('packLabel').textContent = 'Pcs per ' + unit.toLowerCase();
-  try { document.getElementById('conversion').textContent = positiveQty() + ' ' + unit + ' = ' + quantityInPieces() + ' PCS'; }
-  catch (_) { document.getElementById('conversion').textContent = ''; }
+  const unit = cell('itemUnit'), packing = cell('packUnit');
+  document.getElementById('packFields').hidden = !packing;
+  document.getElementById('packLabel').textContent = 'Pcs per ' + (packing || 'pack').toLowerCase() + ' (optional)';
+  document.getElementById('conversion').textContent = 'Quantity is counted in ' + unit + '. Packing details do not change the stock count.';
 }
-function quantityInPieces() {
-  const n = positiveQty() * packSize();
-  if (!Number.isSafeInteger(n)) throw new Error('Quantity is too large.');
-  return n;
-}
-for (const id of ['itemUnit','quantity','pcsPerPack']) document.getElementById(id).addEventListener('input',updateQuantityMode);
+for (const id of ['quantity','pcsPerPack','packUnit']) document.getElementById(id).addEventListener('input',updateQuantityMode);
+document.getElementById('packUnit').addEventListener('change',()=>{if (!cell('packUnit')) document.getElementById('pcsPerPack').value='';updateQuantityMode();});
+document.getElementById('itemUnit').addEventListener('change',()=>{
+  if (action() === 'NEW' && ['BOX','PACK','SET','REAM','ROLL','BOTTLE'].includes(cell('itemUnit'))) document.getElementById('packUnit').value = cell('itemUnit');
+  updateQuantityMode();
+});
 async function ensurePackColumns() {
   const headers = (await getRows('Inventory!N1:O1'))[0] || [];
   const expected = ['Pcs per Pack', 'Pack Unit'];
@@ -811,15 +814,18 @@ async function generateItemCode() {
     formStatus.textContent = 'Generated ' + candidate + '. Register this item and save the code for future use.';
   } catch (error) { formStatus.textContent = 'Cannot generate code: ' + error.message; }
 }
-// Keep A:J and the PCS stock calculations unchanged. Never overwrite occupied columns.
+// Unit G precedes Quantity H. Stock totals must sum Transactions H.
 async function ensureTransactionUnitColumns() {
-  const expected = ['Unit', 'Entered Quantity'];
-  const headers = (await getRows('Transactions!K1:L1'))[0] || [];
-  if (headers.some((h,i) => h && h !== expected[i])) throw new Error('Transactions K/L already have other headers. Reserve K for Unit and L for Entered Quantity before saving.');
-  if (headers[0] !== expected[0] || headers[1] !== expected[1]) {
-    const rows = await getRows('Transactions!K2:L');
-    if (rows.some(r=>r.some(v=>v !== ''))) throw new Error('Transactions K/L contain data without the expected headers. No data was overwritten.');
-    await updateCells('Transactions!K1:L1', [expected]);
+  const formulas = (await sheetsRequest('Inventory!H2:I2', {formula:true})).values?.[0] || [];
+  if (formulas.length !== 2 || formulas.some(f=>typeof f !== 'string' || !f.includes('sum(H)') || !f.includes('Transactions!B2:H'))) throw new Error('Run moveUnitBeforeQuantity in the updated Setup.gs first so stock totals read Quantity from Transactions H.');
+  for (const [column, expected] of [['G','Unit'],['L','Entered Quantity']]) {
+    const header = (await getRows('Transactions!' + column + '1'))[0]?.[0] || '';
+    if (header && header !== expected) throw new Error('Transactions columns need rearranging: run moveUnitBeforeQuantity from the updated Setup.gs. Unit must be G, Quantity H, Staff I, Location J, Balance K, Entered Quantity L.');
+    if (!header) {
+      const rows = await getRows('Transactions!' + column + '2:' + column);
+      if (rows.some(r=>r.some(v=>v !== ''))) throw new Error('Transactions ' + column + ' has data without its expected header. No data was overwritten.');
+      await updateCells('Transactions!' + column + '1', [[expected]]);
+    }
   }
 }
 document.getElementById('generateCode').onclick = generateItemCode;
@@ -827,7 +833,7 @@ function setBusy(value) {
   busy = value;
   document.querySelectorAll('button, input, select').forEach(control => { control.disabled = value; });
   updateQuantityMode();
-  if (!value) for (const id of ['itemName','itemColor','itemBrand','itemCategory']) document.getElementById(id).disabled = action() !== 'NEW';
+  if (!value) for (const id of ['itemName','itemColor','itemBrand','itemCategory','itemUnit','pcsPerPack','packUnit']) document.getElementById(id).disabled = action() !== 'NEW';
   saveButton.disabled = value || !authorizedStaff || transactionFields.hidden;
 }
 function action() { return cell('actionMode'); }
@@ -846,11 +852,13 @@ function changeAction() {
   document.getElementById('stockType').value = action() === 'OUT' ? 'OUT' : 'IN';
   newFields.hidden = false;
   for (const id of ['itemName','itemColor','itemBrand','itemCategory']) {
-    document.getElementById(id).value = id === 'itemUnit' ? 'PCS' : '';
+    document.getElementById(id).value = '';
     document.getElementById(id).disabled = action() !== 'NEW';
   }
   document.getElementById('itemUnit').value = 'PCS';
   document.getElementById('pcsPerPack').value = '';
+  document.getElementById('packUnit').value = '';
+  for (const id of ['itemUnit','packUnit','pcsPerPack']) document.getElementById(id).disabled = action() !== 'NEW';
   document.getElementById('labelDetails').hidden = true;
   updateQuantityMode();
   document.getElementById('storageLocation').value = '';
@@ -897,15 +905,22 @@ async function loadScannedItem(barcode) {
     } else {
       transactionFields.hidden = true;
       if (!item) throw new Error('Item not found. Register it first.');
-      if (String(item.row[5] || '').trim().toUpperCase() !== 'PCS') throw new Error('This item uses a different unit. Convert its recorded quantities to pieces and set Inventory Unit to PCS first.');
+      if (!String(item.row[5] || '').trim()) throw new Error('This item has no saved Unit in Inventory F. Set its correct unit before saving.');
       selectedItem = item;
       for (const [id,index] of [['itemName',1],['itemColor',2],['itemBrand',3],['itemCategory',4]]) {
         const control = document.getElementById(id), val = String(item.row[index] || '');
         if (control.tagName === 'SELECT' && val && !Array.from(control.options).some(o=>o.value===val)) control.add(new Option(val,val));
         control.value = val; control.disabled = true;
       }
-      const packUnit = String(item.row[14] || 'PCS').toUpperCase();
-      document.getElementById('itemUnit').value = Array.from(document.getElementById('itemUnit').options).some(o=>o.value===packUnit) ? packUnit : 'PCS';
+      const baseUnit = String(item.row[5]).trim();
+      const unitControl = document.getElementById('itemUnit');
+      if (!Array.from(unitControl.options).some(o=>o.value===baseUnit)) unitControl.add(new Option(baseUnit,baseUnit));
+      unitControl.value = baseUnit;
+      const packing = String(item.row[14] || '');
+      const packingControl = document.getElementById('packUnit');
+      if (packing && !Array.from(packingControl.options).some(o=>o.value===packing)) packingControl.add(new Option(packing,packing));
+      packingControl.value = packing;
+      for (const id of ['itemUnit','packUnit','pcsPerPack']) document.getElementById(id).disabled = true;
       document.getElementById('pcsPerPack').value = item.row[13] || '';
       document.getElementById('storageLocation').value = item.row[10] || '';
       document.getElementById('unitDisplay').textContent = item.row[5] || 'PCS';
@@ -932,7 +947,7 @@ saveButton.onclick = async () => {
       do { const random=new Uint32Array(2); crypto.getRandomValues(random); barcode='ST-'+Array.from(random,n=>n.toString(36).toUpperCase().padStart(7,'0')).join(''); } while (used.has(barcode));
       barcodeEl.textContent=barcode; manualEl.value=barcode; renderLabel(barcode);
     }
-    const qty = quantityInPieces();
+    const qty = positiveQty();
     const location = cell('storageLocation');
     const transactionTime = uaeTimestamp();
     if (action() === 'NEW') {
@@ -940,6 +955,8 @@ saveButton.onclick = async () => {
       const color = cell('itemColor'), brand = cell('itemBrand');
       const unit = cell('itemUnit');
       const piecesPerPack = packSize();
+      const packing = cell('packUnit');
+      if (!unit) throw new Error('Choose the counting unit.');
       if (!name || !category) throw new Error('Item Name and Category are required.');
       await ensurePackColumns();
       
@@ -950,29 +967,30 @@ saveButton.onclick = async () => {
       // Keep existing G/H/I/J columns and formulas unchanged until migration.
       const g2 = (await sheetsRequest('Inventory!G2', {formula:true})).values?.[0]?.[0];
       const openingFormula = typeof g2 === 'string' && g2.startsWith('=');
-      const added = await appendRow(openingFormula ? 'Inventory!A:F' : 'Inventory!A:G', openingFormula ? [barcode,name,color,brand,category,'PCS'] : [barcode,name,color,brand,category,'PCS',qty]);
+      const added = await appendRow(openingFormula ? 'Inventory!A:F' : 'Inventory!A:G', openingFormula ? [barcode,name,color,brand,category,unit] : [barcode,name,color,brand,category,unit,qty]);
       const match = (added.updates?.updatedRange || '').match(/![A-Z]+(\d+)/);
       if (!match) throw new Error('Item was added, but row was not returned. Check Inventory before retrying.');
       const rowNumber = Number(match[1]);
-      await updateCells('Inventory!K' + rowNumber + ':O' + rowNumber, [[location, '', transactionTime, piecesPerPack, unit]]);
+      await updateCells('Inventory!K' + rowNumber + ':O' + rowNumber, [[location, '', transactionTime, piecesPerPack, packing]]);
       try {
-        await appendRow('Transactions!A:L', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', qty, authorizedStaff.name, location, qty, unit, positiveQty()]);
+        await appendRow('Transactions!A:L', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', unit, qty, authorizedStaff.name, location, qty, positiveQty()]);
       } catch (error) {
         throw new Error('Item registered but transaction log failed. Do NOT save again; check the sheet. ' + error.message);
       }
-      formStatus.textContent = 'Item registered: ' + qty + ' PCS.';
+      formStatus.textContent = 'Item registered: ' + qty + ' ' + unit + '.';
     } else {
       const type = cell('stockType');
       formStatus.textContent = 'Checking available stock...';
       const item = findItem(await readInventory(), barcode);
       if (!item) throw new Error('Item not found. Register it first.');
-      if (String(item.row[5] || '').trim().toUpperCase() !== 'PCS') throw new Error('Convert this item to PCS in the sheet before saving.');
+      const savedUnit = String(item.row[5] || '').trim();
+      if (!savedUnit || savedUnit !== cell('itemUnit')) throw new Error('The saved counting unit changed. Find the item again before saving.');
       const previous = balanceOf(item.row);
       if (type === 'OUT' && qty > previous) throw new Error('Stock Out exceeds the available stock. Check Current Stock in Google Sheets.');
       const balance = previous + (type === 'IN' ? qty : -qty);
       const usedLocation = location || item.row[10] || '';
       await ensureTransactionUnitColumns();
-      await appendRow('Transactions!A:L', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', qty, authorizedStaff.name, usedLocation, balance, cell('itemUnit'), positiveQty()]);
+      await appendRow('Transactions!A:L', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', savedUnit, qty, authorizedStaff.name, usedLocation, balance, qty]);
       try {
         await updateCells('Inventory!K' + item.rowNumber, [[usedLocation]]);
         await updateCells('Inventory!M' + item.rowNumber, [[transactionTime]]);
