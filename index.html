@@ -188,17 +188,21 @@ select {
   </div>
   <div id="transactionFields" hidden>
 
-    <div class="two-col"><div>
-      <label for="itemUnit">Unit</label>
-      <select id="itemUnit"><option value="PCS">Pcs</option><option value="BOX">Box</option><option value="REAM">Ream</option><option value="PACK">Pack</option><option value="SET">Set</option><option value="ROLL">Roll</option><option value="BOTTLE">Bottle</option></select>
+    <div class="two-col" style="align-items:start"><div>
+      <label for="itemUnit">Stock Unit</label>
+      <select id="itemUnit" aria-describedby="unitDescription"><option value="PCS">Pcs</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="PAD">Pad</option><option value="SET">Set</option><option value="BOTTLE">Bottle</option><option value="TUBE">Tube</option><option value="PAIR">Pair</option><option value="CARTON">Carton</option><option value="SHEET">Sheet</option><option value="POUCH">Pouch</option></select>
+      <p id="unitDescription" class="note" style="margin:3px 0 0;font-size:12px" aria-live="polite"></p>
     </div><div>
-      <label for="quantity">Stock Quantity</label><strong id="unitDisplay" hidden>PCS</strong>
-      <input id="quantity" type="number" min="1" step="1" placeholder="Enter quantity">
+      <label id="quantityLabel" for="quantity">Quantity</label><strong id="unitDisplay" hidden>PCS</strong>
+      <input id="quantity" type="number" min="0.000000001" step="any" placeholder="Enter quantity">
     </div></div>
-    <label for="packUnit">Packing type (optional)</label>
-    <select id="packUnit"><option value="">No packing details</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="SET">Set</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="BOTTLE">Bottle</option></select>
-    <div id="packFields" hidden><label id="packLabel" for="pcsPerPack">Pcs per box (optional)</label>
-      <input id="pcsPerPack" type="number" min="1" step="1" placeholder="e.g. 50">
+    <label for="packUnit">Contents Unit (optional)</label>
+    <select id="packUnit"><option value="">No contents details</option><option value="PCS">Pcs</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="PAD">Pad</option><option value="SET">Set</option><option value="BOTTLE">Bottle</option><option value="TUBE">Tube</option><option value="PAIR">Pair</option><option value="CARTON">Carton</option><option value="SHEET">Sheet</option><option value="POUCH">Pouch</option></select>
+    <div id="packFields" hidden><label id="packLabel" for="pcsPerPack">Contents per Stock Unit</label>
+      <input id="pcsPerPack" type="number" min="1" step="1" placeholder="e.g. 100 pouches per ream">
+    </div>
+    <div id="movementUnitFields" hidden><label for="movementUnit">Receive / Issue As</label>
+      <select id="movementUnit"></select>
     </div>
     <p id="conversion" role="status"></p>
     <label for="storageLocation">Storage Location</label>
@@ -207,7 +211,7 @@ select {
   </div>
   <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
 </div>
-<p class="note">Stock totals use the item’s Unit in Inventory F. Packing details are for reference only. Staff name comes from your connected account. Add photos in Inventory column L.</p>
+<p class="note">Stock totals use the item’s Unit in Inventory F. Choose the stock unit or contents unit when receiving or issuing items. Staff name comes from your connected account. Add photos in Inventory column L.</p>
 
   <script>
 
@@ -710,7 +714,7 @@ function currentBarcode() {
 function positiveQty() {
   const raw = document.getElementById('quantity').value.trim();
   const n = Number(raw);
-  if (!raw || !Number.isSafeInteger(n) || n <= 0) throw new Error('Enter a positive whole-number quantity.');
+  if (!raw || !Number.isFinite(n) || n <= 0 || n > 1e9 || (n < 1e-9 || n !== Number(n.toFixed(9)))) throw new Error('Enter a positive quantity with up to 9 decimal places (maximum 1 billion).');
   return n;
 }
 function cell(id) { return document.getElementById(id).value.trim(); }
@@ -759,7 +763,7 @@ async function loadCategories() {
 async function readInventory() {
   const rows = await getRows('Inventory!A1:O');
   const headers = rows.shift() || [];
-  if ((headers[13] && headers[13] !== 'Pcs per Pack') || (headers[14] && headers[14] !== 'Pack Unit')) throw new Error('Inventory N/O are used by other columns. Resolve the pack columns before using this update.');
+  if ((headers[13] && headers[13] !== 'Contents per Unit') || (headers[14] && headers[14] !== 'Contents Unit')) throw new Error('Inventory N/O are used by other columns. Run upgradeStationerySystem from the latest Setup.gs first.');
   if ((!headers[13] || !headers[14]) && rows.some(r=>r[13] || r[14])) throw new Error('Inventory N/O have data without pack headers. Check these columns first.');
   return rows;
 }
@@ -767,30 +771,86 @@ function findItem(rows, barcode) {
   const index = rows.findIndex(row => String(row[0] || '').trim() === barcode);
   return index < 0 ? null : { row: rows[index], rowNumber: index + 2 };
 }
-function balanceOf(row) { return (Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0); }
+function rounded(n) { return Number(n.toFixed(12)); }
+function balanceOf(row) { return rounded((Number(row[6]) || 0) + (Number(row[7]) || 0) - (Number(row[8]) || 0)); }
+function normalizedUnit(value) { return String(value || '').trim().toUpperCase(); }
+function contentsDetails(row) {
+  const base = normalizedUnit(row[5]);
+  const rawSize = row[13], contents = normalizedUnit(row[14]);
+  const size = Number(rawSize);
+  if ((rawSize === '' || rawSize == null) && !contents) return {base, contents:'', size:0};
+  if (!Number.isSafeInteger(size) || size <= 0 || !contents) throw new Error('Complete this item’s Contents per Unit (N) and Contents Unit (O) in Inventory.');
+  if (contents === base) {
+    if (size === 1) return {base, contents:'', size:0};
+    return {base, contents:'', size:0, warning:'Contents Unit matches the stock unit. Review N/O in Inventory; only the stock unit is available.'};
+  }
+  return {base, contents, size};
+}
 function packSize() {
-  const raw = cell('pcsPerPack');
-  if (!raw) return '';
-  if (!cell('packUnit')) throw new Error('Choose a packing type for the packing details.');
-  const n = Number(raw);
-  if (!Number.isSafeInteger(n) || n <= 0) throw new Error('Pieces per pack must be a positive whole number, or leave it blank.');
-  return n;
+  const raw = cell('pcsPerPack'), contents = cell('packUnit');
+  if (!raw && !contents) return '';
+  const size = Number(raw);
+  if (!Number.isSafeInteger(size) || size <= 0 || !contents) throw new Error('Enter both Contents per Unit and Contents Unit, or leave both blank.');
+  if (normalizedUnit(contents) === normalizedUnit(cell('itemUnit'))) throw new Error('Contents Unit must differ from the stock unit.');
+  return size;
 }
-function updateQuantityMode() {
-  const unit = cell('itemUnit'), packing = cell('packUnit');
-  document.getElementById('packFields').hidden = !packing;
-  document.getElementById('packLabel').textContent = 'Pcs per ' + (packing || 'pack').toLowerCase() + ' (optional)';
-  document.getElementById('conversion').textContent = 'Quantity is counted in ' + unit + '. Packing details do not change the stock count.';
+function convertedQuantity(row, entered, enteredUnit) {
+  const details = contentsDetails(row), inputUnit = normalizedUnit(enteredUnit);
+  if (inputUnit === details.base) return entered;
+  if (!details.contents || inputUnit !== details.contents) throw new Error('Choose the saved stock unit or contents unit.');
+  if (!Number.isSafeInteger(entered)) throw new Error('Enter a whole number of contents units.');
+  const result = rounded(entered / details.size);
+  if (!(result > 0)) throw new Error('Converted quantity is too small to save.');
+  return result;
 }
-for (const id of ['quantity','pcsPerPack','packUnit']) document.getElementById(id).addEventListener('input',updateQuantityMode);
-document.getElementById('packUnit').addEventListener('change',()=>{if (!cell('packUnit')) document.getElementById('pcsPerPack').value='';updateQuantityMode();});
-document.getElementById('itemUnit').addEventListener('change',()=>{
-  if (action() === 'NEW' && ['BOX','PACK','SET','REAM','ROLL','BOTTLE'].includes(cell('itemUnit'))) document.getElementById('packUnit').value = cell('itemUnit');
-  updateQuantityMode();
+function configureMovementUnits(row) {
+  const details = contentsDetails(row), select = document.getElementById('movementUnit');
+  select.replaceChildren(new Option(details.base,details.base));
+  if (details.contents) select.add(new Option(details.contents,details.contents));
+  select.value = details.base;
+  document.getElementById('movementUnitFields').hidden = false;
+}
+const UNIT_DESCRIPTIONS = Object.freeze({
+  PCS: 'Individual piece',
+  BOX: 'Box of 50 pens',
+  PACK: 'Pack of 100 laminating pouches',
+  REAM: 'Ream of 500 sheets of A4 paper',
+  ROLL: 'Tape or wrapping paper',
+  PAD: 'Sticky notes or writing pad',
+  SET: 'Geometry or colouring set',
+  BOTTLE: 'Glue, paint, or ink',
+  TUBE: 'Paint or glue',
+  PAIR: 'Scissors',
+  CARTON: 'Carton containing 5 reams',
+  SHEET: 'Individual sheet',
+  POUCH: 'Individual laminating pouch'
 });
+function updateQuantityMode() {
+  const base = cell('itemUnit'), contents = cell('packUnit');
+  const unitDescription = document.getElementById('unitDescription');
+  unitDescription.textContent = UNIT_DESCRIPTIONS[normalizedUnit(base)] || '';
+  unitDescription.hidden = !unitDescription.textContent;
+  document.getElementById('quantityLabel').textContent = action() === 'NEW' ? 'Quantity' : 'Quantity (' + (cell('movementUnit') || base) + ')';
+  document.getElementById('packFields').hidden = !contents;
+  document.getElementById('packLabel').textContent = 'Contents per ' + base.toLowerCase() + ' (e.g. number of ' + (contents || 'contents').toLowerCase() + ')';
+  const message = document.getElementById('conversion');
+  try {
+    if (action() === 'NEW') {
+      const size = packSize();
+      message.textContent = size ? '1 ' + base + ' = ' + size + ' ' + contents + '. Opening quantity is entered in ' + base + '.' : 'Opening quantity is entered in ' + base + '.';
+    } else if (selectedItem) {
+      const qty = positiveQty(), unit = cell('movementUnit');
+      const warning = contentsDetails(selectedItem.row).warning || '';
+      message.textContent = (warning ? warning + ' ' : '') + qty + ' ' + unit + ' = ' + convertedQuantity(selectedItem.row, qty, unit) + ' ' + base;
+    } else message.textContent = 'Select an item to see its counting units.';
+  } catch (error) { message.textContent = error.message; }
+}
+for (const id of ['quantity','pcsPerPack','packUnit','itemUnit','movementUnit']) document.getElementById(id).addEventListener('input',updateQuantityMode);
+document.getElementById('itemUnit').addEventListener('change',updateQuantityMode);
+document.getElementById('packUnit').addEventListener('change',()=>{if (!cell('packUnit')) document.getElementById('pcsPerPack').value='';updateQuantityMode();});
 async function ensurePackColumns() {
   const headers = (await getRows('Inventory!N1:O1'))[0] || [];
-  const expected = ['Pcs per Pack', 'Pack Unit'];
+  const expected = ['Contents per Unit', 'Contents Unit'];
   if (headers.some((h,i) => h && h !== expected[i])) throw new Error('Inventory N/O are already used. Add dedicated pack columns before using this update.');
   if (headers[0] !== expected[0] || headers[1] !== expected[1]) {
     const data = await getRows('Inventory!N2:O');
@@ -817,10 +877,10 @@ async function generateItemCode() {
 // Unit G precedes Quantity H. Stock totals must sum Transactions H.
 async function ensureTransactionUnitColumns() {
   const formulas = (await sheetsRequest('Inventory!H2:I2', {formula:true})).values?.[0] || [];
-  if (formulas.length !== 2 || formulas.some(f=>typeof f !== 'string' || !f.includes('sum(H)') || !f.includes('Transactions!B2:H'))) throw new Error('Run moveUnitBeforeQuantity in the updated Setup.gs first so stock totals read Quantity from Transactions H.');
-  for (const [column, expected] of [['G','Unit'],['L','Entered Quantity']]) {
+  if (formulas.length !== 2 || formulas.some(f=>typeof f !== 'string' || !((f.includes('sum(H)') && f.includes('Transactions!B2:H')) || (/MAP\s*\(/i.test(f) && /SUMIFS\s*\(\s*(?:'Transactions'|Transactions)!\$?H:\$?H/i.test(f))))) throw new Error('Run upgradeStationerySystem in the updated Setup.gs first so stock totals read Quantity from Transactions H.');
+  for (const [column, expected] of [['G','Unit'],['L','Entered Quantity'],['M','Entered Unit']]) {
     const header = (await getRows('Transactions!' + column + '1'))[0]?.[0] || '';
-    if (header && header !== expected) throw new Error('Transactions columns need rearranging: run moveUnitBeforeQuantity from the updated Setup.gs. Unit must be G, Quantity H, Staff I, Location J, Balance K, Entered Quantity L.');
+    if (header && header !== expected) throw new Error('Transactions columns need rearranging: run upgradeStationerySystem from the updated Setup.gs. Unit must be G, Quantity H, Staff I, Location J, Balance K, Entered Quantity L.');
     if (!header) {
       const rows = await getRows('Transactions!' + column + '2:' + column);
       if (rows.some(r=>r.some(v=>v !== ''))) throw new Error('Transactions ' + column + ' has data without its expected header. No data was overwritten.');
@@ -859,6 +919,8 @@ function changeAction() {
   document.getElementById('pcsPerPack').value = '';
   document.getElementById('packUnit').value = '';
   for (const id of ['itemUnit','packUnit','pcsPerPack']) document.getElementById(id).disabled = action() !== 'NEW';
+  document.getElementById('movementUnitFields').hidden = true;
+  document.getElementById('movementUnit').replaceChildren();
   document.getElementById('labelDetails').hidden = true;
   updateQuantityMode();
   document.getElementById('storageLocation').value = '';
@@ -925,6 +987,7 @@ async function loadScannedItem(barcode) {
       document.getElementById('storageLocation').value = item.row[10] || '';
       document.getElementById('unitDisplay').textContent = item.row[5] || 'PCS';
       document.getElementById('quantity').value = '';
+      configureMovementUnits(item.row);
       document.getElementById('stockType').value = mode;
       transactionFields.hidden = false;
       formStatus.textContent = 'Item selected. Enter the quantity to ' + (mode === 'IN' ? 'add.' : 'issue.');
@@ -947,7 +1010,8 @@ saveButton.onclick = async () => {
       do { const random=new Uint32Array(2); crypto.getRandomValues(random); barcode='ST-'+Array.from(random,n=>n.toString(36).toUpperCase().padStart(7,'0')).join(''); } while (used.has(barcode));
       barcodeEl.textContent=barcode; manualEl.value=barcode; renderLabel(barcode);
     }
-    const qty = positiveQty();
+    const enteredQty = positiveQty();
+    let qty = enteredQty;
     const location = cell('storageLocation');
     const transactionTime = uaeTimestamp();
     if (action() === 'NEW') {
@@ -963,8 +1027,7 @@ saveButton.onclick = async () => {
       await ensureTransactionUnitColumns();
       formStatus.textContent = 'Registering item...';
       if (findItem(await readInventory(), barcode)) throw new Error('Barcode already registered. Scan again to use Stock In.');
-      // Transitional sheet layout: first Stock In is stored in G (Opening Stock).
-      // Keep existing G/H/I/J columns and formulas unchanged until migration.
+      // Formula-based opening stock is read from the opening transaction; older manual opening values are preserved.
       const g2 = (await sheetsRequest('Inventory!G2', {formula:true})).values?.[0]?.[0];
       const openingFormula = typeof g2 === 'string' && g2.startsWith('=');
       const added = await appendRow(openingFormula ? 'Inventory!A:F' : 'Inventory!A:G', openingFormula ? [barcode,name,color,brand,category,unit] : [barcode,name,color,brand,category,unit,qty]);
@@ -973,7 +1036,7 @@ saveButton.onclick = async () => {
       const rowNumber = Number(match[1]);
       await updateCells('Inventory!K' + rowNumber + ':O' + rowNumber, [[location, '', transactionTime, piecesPerPack, packing]]);
       try {
-        await appendRow('Transactions!A:L', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', unit, qty, authorizedStaff.name, location, qty, positiveQty()]);
+        await appendRow('Transactions!A:M', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', unit, qty, authorizedStaff.name, location, qty, enteredQty, unit]);
       } catch (error) {
         throw new Error('Item registered but transaction log failed. Do NOT save again; check the sheet. ' + error.message);
       }
@@ -985,19 +1048,22 @@ saveButton.onclick = async () => {
       if (!item) throw new Error('Item not found. Register it first.');
       const savedUnit = String(item.row[5] || '').trim();
       if (!savedUnit || savedUnit !== cell('itemUnit')) throw new Error('The saved counting unit changed. Find the item again before saving.');
+      if (String(item.row[13] || '') !== String(selectedItem.row[13] || '') || normalizedUnit(item.row[14]) !== normalizedUnit(selectedItem.row[14])) throw new Error('Contents details changed. Find the item again before saving.');
+      const enteredUnit = cell('movementUnit');
+      qty = convertedQuantity(item.row, enteredQty, enteredUnit);
       const previous = balanceOf(item.row);
-      if (type === 'OUT' && qty > previous) throw new Error('Stock Out exceeds the available stock. Check Current Stock in Google Sheets.');
-      const balance = previous + (type === 'IN' ? qty : -qty);
+      if (type === 'OUT' && rounded(qty - previous) > 1e-10) throw new Error('Stock Out exceeds the available stock. Check Current Stock in Google Sheets.');
+      const balance = rounded(previous + (type === 'IN' ? qty : -qty));
       const usedLocation = location || item.row[10] || '';
       await ensureTransactionUnitColumns();
-      await appendRow('Transactions!A:L', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', savedUnit, qty, authorizedStaff.name, usedLocation, balance, qty]);
+      await appendRow('Transactions!A:M', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', savedUnit, qty, authorizedStaff.name, usedLocation, balance, enteredQty, enteredUnit]);
       try {
         await updateCells('Inventory!K' + item.rowNumber, [[usedLocation]]);
         await updateCells('Inventory!M' + item.rowNumber, [[transactionTime]]);
       } catch (metadataError) {
         document.getElementById('status').textContent = 'Stock transaction saved. Location/date update failed; check the sheet.';
       }
-      formStatus.textContent = 'Saved ' + (type === 'IN' ? 'Stock In' : 'Stock Out') + ': ' + qty + ' ' + (item.row[5] || 'PCS') + '.';
+      formStatus.textContent = 'Saved ' + (type === 'IN' ? 'Stock In' : 'Stock Out') + ': ' + enteredQty + ' ' + enteredUnit + ' (' + qty + ' ' + savedUnit + ').';
     }
     const savedMessage = formStatus.textContent;
     barcodeEl.textContent = barcode; manualEl.value = barcode; renderLabel(barcode);
