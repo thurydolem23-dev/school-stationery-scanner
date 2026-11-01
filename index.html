@@ -178,7 +178,7 @@ select {
       <option>Writing Supplies</option><option>Paper and Notebooks</option>
       <option>Art and Craft</option><option>Office Supplies</option>
       <option>Teaching Aids</option><option>Storage and Filing</option>
-      <option>Cleaning Supplies</option><option>IT Accessories</option>
+      <option>Cleaning Supplies</option><option>IT Accessories</option><option>Pantry Supplies</option>
     </select>
 
   </div>
@@ -755,6 +755,7 @@ async function loadCategories() {
     const previous = select.value;
     const categories = [...new Set(rows.map(r => String(r[0] || '').trim()).filter(Boolean))];
     if (!categories.length) return;
+    if (!categories.some(category => category.toLowerCase() === 'pantry supplies')) categories.push('Pantry Supplies');
     select.replaceChildren(new Option('Select category', ''));
     for (const category of categories) select.add(new Option(category, category));
     select.value = categories.includes(previous) ? previous : '';
