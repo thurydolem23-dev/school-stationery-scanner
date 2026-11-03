@@ -771,7 +771,7 @@ function setStorageLocation(value) {
 }
 async function loadLocations() {
   try {
-    const rows = await getRows('Categories!C2:C25');
+    const rows = await getRows('Categories!C2:C');
     const locations = [...new Set(rows.map(r => String(r[0] || '').trim()).filter(Boolean))];
     if (!locations.length) return; // Retain the 20 built-in locations.
     const select = document.getElementById('storageLocation');
