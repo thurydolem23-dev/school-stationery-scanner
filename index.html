@@ -749,7 +749,7 @@ async function updateCells(range, values) {
 }
 async function loadCategories() {
   try {
-    const rows = await getRows('Categories!A2:A');
+    const rows = await getRows('Categories!A2:A25');
     const select = document.getElementById('itemCategory');
     const previous = select.value;
     const categories = [...new Set(rows.map(r => String(r[0] || '').trim()).filter(Boolean))];
