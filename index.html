@@ -190,7 +190,7 @@ select {
 
     <div class="two-col" style="align-items:start"><div>
       <label for="itemUnit">Unit</label>
-      <select id="itemUnit" aria-describedby="unitDescription"><option value="PCS">Pcs</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="PAD">Pad</option><option value="SET">Set</option><option value="BOTTLE">Bottle</option><option value="TUBE">Tube</option><option value="PAIR">Pair</option><option value="CARTON">Carton</option><option value="SHEET">Sheet</option><option value="POUCH">Pouch</option></select>
+      <select id="itemUnit" aria-describedby="unitDescription"><option value="PCS">Pcs</option><option value="BOX">Box</option><option value="PACK">Pack</option><option value="REAM">Ream</option><option value="ROLL">Roll</option><option value="PAD">Pad</option><option value="SET">Set</option><option value="BOTTLE">Bottle</option><option value="GALLON">Gallon</option><option value="TUBE">Tube</option><option value="PAIR">Pair</option><option value="CARTON">Carton</option><option value="SHEET">Sheet</option><option value="POUCH">Pouch</option></select>
       <p id="unitDescription" class="note" style="margin:3px 0 0;font-size:12px" aria-live="polite"></p>
     </div><div>
       <label id="quantityLabel" for="quantity">Stock Quantity</label><strong id="unitDisplay" hidden>PCS</strong>
@@ -771,7 +771,7 @@ function setStorageLocation(value) {
 }
 async function loadLocations() {
   try {
-    const rows = await getRows('Categories!C2:C');
+    const rows = await getRows('Categories!C2:C25');
     const locations = [...new Set(rows.map(r => String(r[0] || '').trim()).filter(Boolean))];
     if (!locations.length) return; // Retain the 20 built-in locations.
     const select = document.getElementById('storageLocation');
@@ -836,6 +836,7 @@ const UNIT_DESCRIPTIONS = Object.freeze({
   PAD: 'Sticky notes or writing pad',
   SET: 'Geometry or colouring set',
   BOTTLE: 'Glue, paint, or ink',
+  GALLON: 'Water or cleaning liquid',
   TUBE: 'Paint or glue',
   PAIR: 'Scissors',
   CARTON: 'Carton containing 5 reams',
