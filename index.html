@@ -205,6 +205,10 @@ select {
     <p id="conversion" role="status"></p>
     <label for="storageLocation">Storage Location</label>
     <select id="storageLocation"><option value="">Select storage location</option><option>L01 – Admin</option><option>L02 – Block A – Ground Floor – AGF-24</option><option>L03 – Block A – Ground Floor – AGF-26</option><option>L04 – Block A – First Floor – AFF-23 Store</option><option>L05 – Block A – First Floor – AFF-24 Store</option><option>L06 – Block A – First Floor – AFF-16 Class Store</option><option>L07 – Block B – Ground Floor – BGF-26</option><option>L08 – Block B – Ground Floor – Resource Store</option><option>L09 – Block B – First Floor – BFF-26</option><option>L10 – Block B – First Floor – Year 2 Store</option><option>L11 – Block B – First Floor – Year 3 Resource Room</option><option>L12 – Block C – Ground Floor – CGF-26</option><option>L13 – Block C – Ground Floor – Art Store</option><option>L14 – Block C – First Floor – CFF-22</option><option>L15 – Block C – First Floor – Resource Store</option><option>L16 – Block C – Ground Floor – CGF-22</option><option>L17 – Block C – Ground Floor – Resource Store</option><option>L18 – Block F – First Floor – FFF-02 Resource Room</option><option>L19 – Block F – First Floor – FFF-28</option><option>L20 – Block F – First Floor – Arabic Resource Room</option></select>
+    <div id="requestedByFields" hidden>
+      <label for="requestedBy">Requested By (Staff Name)</label>
+      <input id="requestedBy" type="text" placeholder="Enter requesting staff name" autocomplete="off">
+    </div>
     <button id="saveTransaction" disabled>Save Transaction</button>
   </div>
   <p id="formStatus" role="status">Connect Google Sheets, then scan or enter a barcode.</p>
@@ -927,6 +931,9 @@ function setBusy(value) {
   saveButton.disabled = value || !authorizedStaff || transactionFields.hidden;
 }
 function action() { return cell('actionMode'); }
+function updateRequestedByVisibility() {
+  document.getElementById('requestedByFields').hidden = action() !== 'OUT';
+}
 function changeAction() {
   if (busy) return;
   ++lookupSerial;
@@ -935,6 +942,8 @@ function changeAction() {
   manualEl.value = '';
   document.getElementById('labelBarcode').replaceChildren();
   document.getElementById('quantity').value = '';
+  document.getElementById('requestedBy').value = '';
+  updateRequestedByVisibility();
   document.getElementById('issueUnitFields').hidden = true;
   document.getElementById('issueUnit').replaceChildren();
   document.getElementById('itemDetails').hidden = true;
@@ -1039,6 +1048,8 @@ saveButton.onclick = async () => {
     let qty = enteredQty;
     const location = cell('storageLocation');
     const transactionTime = uaeTimestamp();
+    const requestedBy = action() === 'OUT' ? cell('requestedBy') : '';
+    if (action() === 'OUT' && !requestedBy) throw new Error('Enter Requested By (Staff Name) before saving Stock Out.');
     if (action() === 'NEW') {
       const name = cell('itemName'), category = cell('itemCategory');
       const color = cell('itemColor'), brand = cell('itemBrand');
@@ -1061,7 +1072,7 @@ saveButton.onclick = async () => {
       const rowNumber = Number(match[1]);
       await updateCells('Inventory!K' + rowNumber + ':O' + rowNumber, [[location, '', transactionTime, piecesPerPack, packing]]);
       try {
-        await appendRow('Transactions!A:P', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', unit, qty, authorizedStaff.name, location, qty, piecesPerPack, packing, category, enteredQty, unit]);
+        await appendRow('Transactions!A:Q', [transactionTime, barcode, name, color, brand, 'OPENING STOCK', unit, qty, authorizedStaff.name, location, qty, piecesPerPack, packing, category, enteredQty, unit, '']);
       } catch (error) {
         throw new Error('Item registered but transaction log failed. Do NOT save again; check the sheet. ' + error.message);
       }
@@ -1081,7 +1092,7 @@ saveButton.onclick = async () => {
       const balance = rounded(previous + (type === 'IN' ? qty : -qty));
       const usedLocation = location || item.row[10] || '';
       await ensureTransactionUnitColumns();
-      await appendRow('Transactions!A:P', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', savedUnit, qty, authorizedStaff.name, usedLocation, balance, normalizedUnit(savedUnit) === 'PCS' ? '' : (item.row[13] ?? ''), normalizedUnit(savedUnit) === 'PCS' || !item.row[13] ? '' : packingLabel(savedUnit), item.row[4] || '', enteredQty, enteredUnit]);
+      await appendRow('Transactions!A:Q', [transactionTime, barcode, item.row[1] || '', item.row[2] || '', item.row[3] || '', type === 'IN' ? 'STOCK IN' : 'STOCK OUT', savedUnit, qty, authorizedStaff.name, usedLocation, balance, normalizedUnit(savedUnit) === 'PCS' ? '' : (item.row[13] ?? ''), normalizedUnit(savedUnit) === 'PCS' || !item.row[13] ? '' : packingLabel(savedUnit), item.row[4] || '', enteredQty, enteredUnit, type === 'OUT' ? requestedBy : '']);
       try {
         await updateCells('Inventory!K' + item.rowNumber, [[usedLocation]]);
         await updateCells('Inventory!M' + item.rowNumber, [[transactionTime]]);
@@ -1094,6 +1105,7 @@ saveButton.onclick = async () => {
     barcodeEl.textContent = barcode; manualEl.value = barcode; renderLabel(barcode);
     document.getElementById('labelDetails').hidden = false;
     document.getElementById('quantity').value = '';
+    document.getElementById('requestedBy').value = '';
     await new Promise(resolve => setTimeout(resolve, 600));
     if (action() === 'NEW') {
       document.getElementById('actionMode').value = 'IN';
